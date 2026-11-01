@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.0 - 2026-11-01
+
+Rename the Windows plugin to MuseSync (谱伴同步), with MuseSync Bridge 1.3.0.
+
+- Update the editor, floating strip, guide, startup popup, VST3 factory metadata and installer branding.
+- Rename downloadable packages and the GitHub repository to MuseSync; keep prior releases.
+- Preserve VST3 processor/controller IDs, saved parameters, bundle paths and bridge snapshot paths for upgrades from MuseTone.
+- Retain floating playback controls, measure-beat display, nine themes and the About credit.
+
+Compatibility: physical files remain MuseTone.vst3 and MuseToneSync. These are not duplicate plugins or stale builds. Restart MuseScore after upgrading both components. Existing limitations from 2.1.0 still apply.
+
 ## 2.1.0 - 2026-11-01
 
 Windows x64 release, with MuseTone Sync 1.2.0.

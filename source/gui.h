@@ -42,14 +42,14 @@ using Steinberg::IPlugFrame;
 using Steinberg::IPlugView;
 
 //------------------------------------------------------------------------------
-// 项目主页 —— 底部 MuseTone 品牌链接的跳转目标。
+// 项目主页 —— 底部 MuseSync 品牌链接的跳转目标。
 //
 // ⭐ 三端（macOS / Windows / Linux）共用这一个常量，不要在各自的 gui 文件里
 //    再各写一份 URL 字符串。本项目已经反复栽在「同一语义在三端各写一遍、
 //    改的时候漏掉一端」上（见 MEMORY 铁律 9：必须逐端比对）—— 地址只此一处，
 //    改地址就改这一行。
 //------------------------------------------------------------------------------
-inline constexpr const char* kBrandHomeUrl = "https://github.com/780566922/dawei-drumscore";
+inline constexpr const char* kBrandHomeUrl = "https://github.com/Aigooz/MuseSync";
 
 //------------------------------------------------------------------------------
 // 拍号变化（按小节覆盖）与共用的小节推进算法

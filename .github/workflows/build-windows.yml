@@ -1,4 +1,4 @@
-name: Build MuseTone Windows
+name: Build MuseSync Windows
 
 on:
   push:
@@ -63,7 +63,7 @@ jobs:
         run: ./tests/installer_smoke_test.ps1 -BuildDirectory build -IsccPath "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
       - uses: actions/upload-artifact@v4
         with:
-          name: MuseTone-Windows-x64-release
+          name: MuseSync-Windows-x64-release
           path: |
             dist/releases/*/*.exe
             dist/releases/*/*.zip
@@ -80,7 +80,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: MuseTone-Windows-x64-release
+          name: MuseSync-Windows-x64-release
           path: release-files
       - name: Publish versioned release
         env:
@@ -89,9 +89,9 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${TAG#v}"
-          test -f "release-files/MuseTone-Setup-${VERSION}-Windows-x64.exe"
+          test -f "release-files/MuseSync-Setup-${VERSION}-Windows-x64.exe"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; preserving published assets."
           else
-            gh release create "$TAG" release-files/*.exe release-files/*.zip release-files/SHA256SUMS.txt --verify-tag --title "MuseTone $VERSION" --notes-file release-files/RELEASE-NOTES.md
+            gh release create "$TAG" release-files/*.exe release-files/*.zip release-files/SHA256SUMS.txt --verify-tag --title "MuseSync $VERSION" --notes-file release-files/RELEASE-NOTES.md
           fi

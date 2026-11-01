@@ -42,6 +42,7 @@ namespace aplay {
 //------------------------------------------------------------------------------
 // 用 DECLARE_UID（工厂宏 DEF_CLASS 需要这种形式），
 // 不是 DECLARE_CLASS_IID —— 两者生成的符号名不同（后者带 _iid 后缀）
+// Stable MuseTone IDs: the MuseSync rename must not invalidate saved scores.
 DECLARE_UID (MuseToneProcessorUID,  0x4D555354, 0x544F4E45, 0x50524332, 0x00000001)
 DECLARE_UID (MuseToneControllerUID, 0x4D555354, 0x544F4E45, 0x43545232, 0x00000002)
 

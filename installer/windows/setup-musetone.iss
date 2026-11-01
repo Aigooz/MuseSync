@@ -17,15 +17,16 @@ AppId=MuseToneInstallerSmoke
 #else
 AppId={{6A1D47D5-4A18-4B5B-9A09-1C5E8A9B7D21}
 #endif
-AppName=MuseTone
+AppName=MuseSync
 AppVersion={#MyAppVersion}
-AppVerName=MuseTone {#MyAppVersion}
-AppPublisher=MuseTone contributors
+AppVerName=MuseSync {#MyAppVersion}
+AppPublisher=MuseSync contributors
+AppPublisherURL=https://github.com/Aigooz/MuseSync
 DefaultDirName={autopf}\MuseTone
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 OutputDir={#MyOutputDir}
-OutputBaseFilename=MuseTone-Setup-{#MyAppVersion}-Windows-x64
+OutputBaseFilename=MuseSync-Setup-{#MyAppVersion}-Windows-x64
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -39,7 +40,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 LicenseFile={#MySourceDir}\LICENSE
 InfoBeforeFile={#MySourceDir}\installer\windows\INSTALL.txt
-UninstallDisplayName=MuseTone {#MyAppVersion}
+UninstallDisplayName=MuseSync {#MyAppVersion}
 UninstallDisplayIcon={code:Vst3Root}\MuseTone.vst3\PlugIn.ico
 CloseApplications=no
 CloseApplicationsFilter=*.vst3,*.qml,*.js
@@ -130,7 +131,7 @@ procedure InitializeWizard();
 begin
   ScorePage := CreateInputDirPage(wpLicense, 'MuseScore installation',
     'Choose your MuseScore 4 installation folder',
-    'MuseTone Sync will be installed into this application''s plugins folder. Select the folder containing bin\MuseScore4.exe, not your scores folder.',
+    'MuseSync Bridge will be installed into this application''s plugins folder. Select the folder containing bin\MuseScore4.exe, not your scores folder.',
     False, '');
   ScorePage.Add('MuseScore 4 folder:');
   ScorePage.Values[0] := DetectMuseScore();

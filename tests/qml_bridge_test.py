@@ -6,7 +6,8 @@ import tempfile
 import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-from PyQt5.QtCore import QObject, QSettings, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
+from PyQt5 import sip
+from PyQt5.QtCore import QCoreApplication, QEvent, QObject, QSettings, QUrl, pyqtProperty, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QGuiApplication
 from PyQt5.QtQml import QQmlComponent, QQmlEngine, qmlRegisterType
 from PyQt5.QtQuick import QQuickItem
@@ -144,6 +145,8 @@ with tempfile.TemporaryDirectory(prefix="MuseTone-QML-") as directory:
     assert component.isReady(), "\n".join(e.toString() for e in component.errors())
     plugin = component.create()
     assert plugin is not None, "\n".join(e.toString() for e in component.errors())
+    assert plugin.property("title") == "MuseSync Bridge"
+    assert plugin.property("version") == "1.3.0"
     plugin.run.emit()
     get_profile = ctypes.windll.kernel32.GetPrivateProfileStringW
     get_profile.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
@@ -160,6 +163,7 @@ with tempfile.TemporaryDirectory(prefix="MuseTone-QML-") as directory:
     assert fields[0] == "MT3" and fields[2:7] == ["90.000000", "7", "8", "", "1,3.500000000,10"]
     notice = plugin.findChild(QObject, "startupNotice")
     assert notice and notice.property("visible"), "successful startup did not show confirmation"
+    assert notice.property("title") == "MuseSync Bridge", "startup notice uses an old brand"
     assert "已连接" in notice.property("status")
     notice.setProperty("visible", False)
     assert abs(int(time.time() * 1000) - int(fields[1])) < 5000
@@ -213,5 +217,8 @@ with tempfile.TemporaryDirectory(prefix="MuseTone-QML-") as directory:
     spin()
     assert read_snapshot().startswith("MT3|"), "dismissing startup notice stopped background sync"
     plugin.deleteLater()
+    # Destroy QML windows before the engine/application, including deferred deletes.
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    sip.delete(engine)
     app.processEvents()
 print("PASS: headless QML loading, score API contract, heartbeat, score close and QSettings/Win32 interoperability")

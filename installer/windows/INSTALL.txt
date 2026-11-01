@@ -1,4 +1,4 @@
-MuseTone 2.1.0 / Windows x64
+MuseSync 2.2.0 / Windows x64
 
 This EXE installs a MuseScore VST3 plugin, not a standalone audio player.
 Windows 10/11 x64 and MuseScore 4 are required (target environment: 4.7).
@@ -6,16 +6,16 @@ Automated tests do not replace testing inside your MuseScore installation.
 Save your score and close MuseScore before installing or upgrading.
 
 INSTALL
-1. Run MuseTone-Setup-2.1.0-Windows-x64.exe as administrator.
+1. Run MuseSync-Setup-2.2.0-Windows-x64.exe as administrator.
 2. Select the MuseScore installation folder containing bin\MuseScore4.exe.
    Custom installations, including other drives, are supported.
-3. The installer installs both MuseTone.vst3 and MuseTone Sync.
+3. The installer installs both MuseSync VST3 and MuseSync Bridge.
    The MuseToneSync folder allows Users to write sync snapshots without
    running MuseScore as administrator; no other plugin folders are changed.
-4. Restart MuseScore. In Plugin Manager, enable MuseTone Sync.
-5. Run MuseTone Sync from the Plugins menu once per MuseScore session.
+4. Restart MuseScore. In Plugin Manager, enable MuseSync Bridge.
+5. Run MuseSync Bridge from the Plugins menu once per MuseScore session.
    A popup confirms that the background sync service has started.
-6. In the mixer, add MuseTone as a VST3 instrument on an output channel.
+6. In the mixer, add MuseSync as a VST3 instrument on an output channel.
    Keep that channel unmuted. Open its editor and load your accompaniment.
 
 USE
@@ -36,14 +36,20 @@ MuseToneSync must be writable by the Windows user running MuseScore.
 Use the EXE installer to configure this permission automatically.
 Then follow steps 4-6 above.
 
+UPGRADE COMPATIBILITY
+Previously named MuseTone. VST3 class IDs, saved state, installer identity,
+MuseTone.vst3 and MuseToneSync paths are deliberately unchanged so existing
+scores and installations continue to find the same plugin. Do not rename
+these folders manually. Instructions/uninstaller remain in Program Files\MuseTone.
+
 SECURITY AND UNINSTALL
 The installer is not code-signed. Verify its SHA256 against the release's
 SHA256SUMS.txt. Follow your Windows security policy if SmartScreen warns.
-Uninstall MuseTone from Windows Settings > Apps after closing MuseScore.
+Uninstall MuseSync from Windows Settings > Apps after closing MuseScore.
 Uninstallation does not delete your scores, audio files or other VST3 plugins.
 
 LICENSE
 GPL-3.0. Source code must be available with the matching release.
 Third-party license notices are installed alongside these instructions.
-MuseTone is based on the DaweiDrumScore open-source project.
+MuseSync (formerly MuseTone) is based on the DaweiDrumScore open-source project.
 Customization credit: @爱鸽咕子

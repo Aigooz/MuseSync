@@ -37,7 +37,7 @@ using namespace Steinberg::Vst;
 static constexpr uint32 kAPlayDistributable = 1 << 0;
 
 #ifndef MUSETONE_VERSION
-#define MUSETONE_VERSION "2.1.0"
+#define MUSETONE_VERSION "2.2.0"
 #endif
 #define APLAY_VERSION_WSTR STR16 (MUSETONE_VERSION)
 
@@ -1522,11 +1522,11 @@ public:
                  Steinberg::PClassInfo::kCategorySize - 1);
         // ---- 类名（插件的显示名，DAW 菜单里「VST」下一级显示的就是它）----
         // Keep the factory name consistent with the editor title and installer.
-        strncpy (ci.name, "MuseTone", Steinberg::PClassInfo::kNameSize - 1);
+        strncpy (ci.name, "MuseSync", Steinberg::PClassInfo::kNameSize - 1);
         ci.classFlags = 0;
         strncpy (ci.subCategories, "Instrument", Steinberg::PClassInfo2::kSubCategoriesSize - 1);
         // 厂商名：纯 ASCII。它是插件名上面那一级菜单的分组名，中文会乱码。
-        strncpy (ci.vendor, "MuseTone", Steinberg::PClassInfo2::kVendorSize - 1);
+        strncpy (ci.vendor, "MuseSync", Steinberg::PClassInfo2::kVendorSize - 1);
         strncpy (ci.version, MUSETONE_VERSION, Steinberg::PClassInfo2::kVersionSize - 1);
         strncpy (ci.sdkVersion, kVstVersionString, Steinberg::PClassInfo2::kVersionSize - 1);
         registerClass (&ci, aplay::APlayProcessor::createInstance);
@@ -1613,8 +1613,8 @@ private:
     static Steinberg::PFactoryInfo factoryInfo ()
     {
         Steinberg::PFactoryInfo fi {};
-        strncpy (fi.vendor, "MuseTone", Steinberg::PFactoryInfo::kNameSize - 1);
-        strncpy (fi.url, "", Steinberg::PFactoryInfo::kURLSize - 1);
+        strncpy (fi.vendor, "MuseSync", Steinberg::PFactoryInfo::kNameSize - 1);
+        strncpy (fi.url, ap::kBrandHomeUrl, Steinberg::PFactoryInfo::kURLSize - 1);
         strncpy (fi.email, "", Steinberg::PFactoryInfo::kEmailSize - 1);
         fi.flags = Steinberg::Vst::kDefaultFactoryFlags;
         return fi;

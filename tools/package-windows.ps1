@@ -48,7 +48,7 @@ foreach ($entry in $licenses.GetEnumerator()) {
 }
 & $IsccPath "/DMyBuildDir=$build" "/DMyOutputDir=$output" (Join-Path $root 'installer/windows/setup-musetone.iss')
 if ($LASTEXITCODE -ne 0) { throw "Installer compiler failed: $LASTEXITCODE" }
-$portable = Join-Path $output "MuseTone-$version-Windows-x64"
+$portable = Join-Path $output "MuseSync-$version-Windows-x64"
 New-Item -ItemType Directory -Path $portable -Force | Out-Null
 $portableBundle = Join-Path $portable 'MuseTone.vst3'
 foreach ($file in @('Contents/x86_64-win/MuseTone.vst3', 'Contents/Resources/moduleinfo.json', 'PlugIn.ico', 'desktop.ini')) {
@@ -67,11 +67,11 @@ foreach ($file in @('LICENSE', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'instal
 $portableLicenses = Join-Path $portable 'licenses'
 New-Item -ItemType Directory -Path $portableLicenses -Force | Out-Null
 Get-ChildItem -LiteralPath $notices -File | Copy-Item -Destination $portableLicenses -Force
-$zip = Join-Path $output "MuseTone-$version-Windows-x64.zip"
+$zip = Join-Path $output "MuseSync-$version-Windows-x64.zip"
 Compress-Archive -LiteralPath $portable -DestinationPath $zip -Force
 
 # Full corresponding source includes the pinned SDK, but not Git metadata or local sync state.
-$sourceZip = Join-Path $output "MuseTone-$version-Source.zip"
+$sourceZip = Join-Path $output "MuseSync-$version-Source.zip"
 $sourceInputs = @(
     'CMakeLists.txt', 'README.md', 'LICENSE', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', '.gitignore',
     'build.sh', 'make_pkg.sh', 'source', 'tests', 'testdata', 'installer', 'tools', 'companion',
@@ -82,7 +82,7 @@ $sourceInputs = @(
 & tar.exe -a -cf $sourceZip --exclude=.git --exclude=__pycache__ --exclude=*.jsc --exclude=MuseToneSync.ini --exclude=MuseToneCommands.ini -C $root @sourceInputs
 if ($LASTEXITCODE -ne 0) { throw "Source archive failed: $LASTEXITCODE" }
 $assets = @(
-    (Join-Path $output "MuseTone-Setup-$version-Windows-x64.exe"), $zip, $sourceZip
+    (Join-Path $output "MuseSync-Setup-$version-Windows-x64.exe"), $zip, $sourceZip
 )
 $checksums = $assets | ForEach-Object {
     $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256

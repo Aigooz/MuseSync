@@ -72,7 +72,7 @@ foreach ($target in $targets) {
             throw "Refusing to move unverified nested directory: $nested"
         }
         $info = Get-Content -LiteralPath $nestedInfo -Raw | ConvertFrom-Json
-        if ($info.'Factory Info'.Vendor -ne 'MuseTone') {
+        if ($info.'Factory Info'.Vendor -notin @('MuseTone', 'MuseSync')) {
             throw "Refusing to move a bundle from another vendor: $nested"
         }
         $archiveRoot = [IO.Path]::GetFullPath((Join-Path $workspace 'dist/deployment-backups'))

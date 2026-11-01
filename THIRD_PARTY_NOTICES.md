@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-MuseTone is a modification of the GPL-3.0 DaweiDrumScore project:
+MuseSync (formerly MuseTone) is a modification of the GPL-3.0 DaweiDrumScore project:
 https://github.com/780566922/dawei-drumscore
 The project license is provided in LICENSE. Original copyright notices are retained in source files.
 

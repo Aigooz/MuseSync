@@ -1,17 +1,17 @@
-# 谱韵声场 MuseTone · MuseScore 音频同步插件
+# MuseSync 谱伴同步 · MuseScore 音频同步插件
 
-> 为 MuseScore 4 提供「边看谱、边听伴奏」的能力。当前目录重点维护 Windows 版 VST3 插件「谱韵声场 MuseTone」。
+> 为 MuseScore 4 提供「边看谱、边听伴奏」的能力。Windows 版 VST3 插件原名 MuseTone，现更名为「MuseSync 谱伴同步」。
 
 MuseScore 本身不支持加载外部音频伴奏。这个插件以 VST3 的形式挂进 MuseScore 的混音器，
 把 mp3 / wav / m4a 等音频文件直接拖进插件窗口，就能在**谱面滚动的同时**播放伴奏，
 并用波形上的小节网格和播放位置指示线对照练习。
 
-本版本基于原项目源码重做，源码、原版产物与 MuseTone Windows 产物均保存在本目录，便于继续修改。
+本版本基于原项目源码重做，保留原项目来源和许可证，便于继续修改。
 
-## Windows 2.1.0
+## Windows 2.2.0
 
-当前发布版为 **MuseTone 2.1.0**，随附 **MuseTone Sync 1.2.0**。
-前往 [Releases](https://github.com/Aigooz/MuseTone/releases/latest) 下载 `MuseTone-Setup-2.1.0-Windows-x64.exe`。
+当前发布版为 **MuseSync 2.2.0**，随附 **MuseSync Bridge 1.3.0**。
+前往 [Releases](https://github.com/Aigooz/MuseSync/releases/latest) 下载 `MuseSync-Setup-2.2.0-Windows-x64.exe`。
 这是安装器，安装后在 MuseScore 中使用，不是独立播放器。
 
 - 自动读取当前谱面的速度与拍号变化，支持小节内变速、弱起和自定义小节编号。
@@ -21,14 +21,15 @@ MuseScore 本身不支持加载外部音频伴奏。这个插件以 VST3 的形�
 - 整曲移调保持时长，不自动拉伸伴奏；反复展开和临时播放速度倍率仍有限制。
 
 详见 [Windows 使用说明](docs/musetone-windows.md)、[更新记录](CHANGELOG.md) 和
-[本版发布说明](docs/RELEASE-2.1.0.md)。下方 macOS/Linux 内容保留自上游，
+[本版发布说明](docs/RELEASE-2.2.0.md)。为兼容旧谱面，VST3 类 ID、参数及底层文件夹
+`MuseTone.vst3` / `MuseToneSync` 保持不变，不需要手动改名。下方 macOS/Linux 内容保留自上游，
 本次不提供更新后的 macOS/Linux 安装包，其操作和功能可能与 Windows 新版不同。
 
 ---
 
 ## 原项目功能概览
 
-本节保留原跨平台项目说明；Windows 2.1.0 的安装方式、自动读谱和交互以上方新版说明为准。
+本节保留原跨平台项目说明；Windows 2.2.0 的安装方式、自动读谱和交互以上方新版说明为准。
 
 - 🎵 **拖拽即播**：把音频文件拖进插件窗口即可加载
   （macOS / Windows：mp3 / wav / m4a / aac / flac / ogg 等；Linux：mp3 / wav / flac / ogg）
@@ -77,18 +78,18 @@ MuseScore 本身不支持加载外部音频伴奏。这个插件以 VST3 的形�
 
 ### Windows（推荐：EXE 安装器）
 
-1. 保存谱面并退出 MuseScore，下载 `MuseTone-Setup-2.1.0-Windows-x64.exe`。
+1. 保存谱面并退出 MuseScore，下载 `MuseSync-Setup-2.2.0-Windows-x64.exe`。
 2. 核对同一 Release 内 `SHA256SUMS.txt`，再运行安装器；需要管理员权限。
 3. 选择包含 `bin\MuseScore4.exe` 的 MuseScore 安装目录，支持 D 盘等自定义路径。
-4. 安装器同时安装 VST3 和 MuseTone Sync，随后重启 MuseScore。
-5. 在插件管理中启用 `MuseTone Sync`，每次 MuseScore 会话从插件菜单运行一次。
+4. 安装器同时安装 VST3 和 MuseSync Bridge，随后重启 MuseScore。
+5. 在插件管理中启用 `MuseSync Bridge`，每次 MuseScore 会话从插件菜单运行一次。
    出现「已开启」提示后关闭提示即可，后台同步仍继续。
-6. 在混音器的 VST3 音源列表选择 `MuseTone`，打开面板并载入伴奏，保持通道未静音。
+6. 在混音器的 VST3 音源列表选择 `MuseSync`，打开面板并载入伴奏，保持通道未静音。
 
 系统要求：Windows 10/11 x64、MuseScore 4。安装器未做代码签名，可能触发 SmartScreen；
 请确认来源并遵循本机安全策略，不要关闭系统防护。自动化测试不代替 MuseScore 实机验证。
 
-便携包 `MuseTone-2.1.0-Windows-x64.zip` 用于手动部署，具体目录见随包 `INSTALL.txt`。
+便携包 `MuseSync-2.2.0-Windows-x64.zip` 用于手动部署，具体目录见随包 `INSTALL.txt`。
 VST3 安装到 `C:\Program Files\Common Files\VST3\MuseTone.vst3`，Sync 安装到所选
 MuseScore 目录的 `plugins\MuseToneSync`，卸载及说明文件独立放在 `C:\Program Files\MuseTone`。
 只为 Sync 自身目录配置用户写入权限，以便非管理员 MuseScore 写入同步快照。
@@ -136,7 +137,7 @@ sudo dnf install ./DaweiDrumScore-*-Linux-x86_64.rpm
 
 ### 在 MuseScore 里启用
 
-混音器 → 任一轨道的 **Sound** 列 → 选择 **谱韵声场 MuseTone**。
+混音器 → 任一轨道的 **Sound** 列 → Windows 新版选择 **MuseSync**（其他平台旧版名称可能不同）。
 
 > 插件菜单层级为 `VST → 厂商名 → 插件名`，插件名取自 bundle 文件名。
 

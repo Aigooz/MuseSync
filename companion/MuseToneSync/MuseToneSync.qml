@@ -5,9 +5,9 @@ import "ScoreSnapshot.js" as Snapshot
 
 MuseScore {
     id: root
-    title: "MuseTone Sync"
-    description: "Live tempo and time-signature bridge for MuseTone."
-    version: "1.2.0"
+    title: "MuseSync Bridge"
+    description: "Live tempo and time-signature bridge for MuseSync."
+    version: "1.3.0"
     requiresScore: false
     property var lastScore: null
     property string scoreSession: ""
@@ -42,7 +42,7 @@ MuseScore {
             // Read curScore on every pass: a cached binding misses tab switches.
             hex = Snapshot.encodeSnapshot(Snapshot.readScore(updateIdentity(), division), Date.now(), scoreSession);
         } catch (error) {
-            console.log("MuseTone Sync:", String(error));
+            console.log("MuseSync Bridge:", String(error));
         }
         bridge.setValue("Snapshot/hex", hex);
         bridge.sync();
@@ -55,13 +55,13 @@ MuseScore {
         width: 360
         height: 164
         visible: false
-        title: "MuseTone Sync"
+        title: "MuseSync Bridge"
         flags: Qt.Dialog | Qt.WindowStaysOnTopHint
         color: "#f4f5f6"
         property string status: ""
         Text {
             x: 24; y: 22
-            text: "MuseTone Sync 已开启"
+            text: "MuseSync Bridge 已开启"
             color: "#232527"
             font.pixelSize: 18
         }
@@ -95,7 +95,7 @@ MuseScore {
             commands.setValue("Result/ack", request.id + (selected ? "|ok" : "|no-selection"));
             commands.sync();
         } catch (error) {
-            console.log("MuseTone Sync seek:", String(error));
+            console.log("MuseSync Bridge seek:", String(error));
         }
     }
 

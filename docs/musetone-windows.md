@@ -1,17 +1,20 @@
-# MuseTone for Windows
+# MuseSync 谱伴同步 for Windows
 
-当前发布版：**2.1.0**，同步组件：**MuseTone Sync 1.2.0**。
+当前发布版：**2.2.0**，同步组件：**MuseSync Bridge 1.3.0**。
+
+原名 MuseTone。为兼容旧谱面，VST3 类 ID、参数状态、安装器身份及底层路径
+`MuseTone.vst3` / `MuseToneSync` 保持不变。显示名称已统一更新，无需手动重命名文件。
 
 ## 下载与启用
 
-普通用户下载 `MuseTone-Setup-2.1.0-Windows-x64.exe`，核对同一发布页的
+普通用户下载 `MuseSync-Setup-2.2.0-Windows-x64.exe`，核对同一发布页的
 `SHA256SUMS.txt` 后安装。此 EXE 是安装器，不是独立播放器。
 需要 Windows 10/11 x64 和 MuseScore 4；安装前保存谱面并退出 MuseScore。
 
 安装时选择包含 `bin\MuseScore4.exe` 的 MuseScore 目录，支持其他盘符。
-安装器会同时部署 VST3 和 Sync。重启后在插件管理中启用 `MuseTone Sync`，
+安装器会同时部署 VST3 和 Bridge。重启后在插件管理中启用 `MuseSync Bridge`，
 每次会话从插件菜单运行一次，出现已开启提示后可以关闭提示，后台同步仍继续。
-在混音器的 VST3 音源列表选择 `MuseTone`，保持该通道未静音，然后载入伴奏。
+在混音器的 VST3 音源列表选择 `MuseSync`，保持该通道未静音，然后载入伴奏。
 
 安装器未签名，可能触发 SmartScreen，请确认来源并遵循本机安全策略。
 安装器为 Sync 自身文件夹配置用户写入权限，以保存同步快照，其他插件目录不受影响。
@@ -20,7 +23,7 @@
 
 ## 功能
 
-MuseTone 是基于原 `DaweiDrumScore` 源码重做的 Windows VST3 插件，保留音频载入、波形、拍号网格、偏移和宿主时间轴同步，并增加：
+MuseSync 是基于原 `DaweiDrumScore` 源码重做的 Windows VST3 插件，保留音频载入、波形、拍号网格、偏移和宿主时间轴同步，并增加：
 
 - 半音：`-24` 到 `+24`，用于整曲移调。
 - 音分：`-100` 到 `+100`，用于细微校音。
@@ -65,11 +68,11 @@ C:\Program Files\Common Files\VST3\MuseTone.vst3
 
 ## 与原版共存
 
-原版 `DaweiDrumScore.vst3` 和原版安装器位于 `dist/windows`，新版产物使用不同 bundle 名称和 UID，目标输出位于 `dist/windows-musetone`，不会覆盖原版文件。安装新版后，MuseScore 里显示为 `MuseTone`。
+原版 `DaweiDrumScore.vst3` 和原版安装器位于 `dist/windows`，新版产物使用不同 bundle 名称和 UID，目标输出位于 `dist/windows-musetone`，不会覆盖原版文件。安装新版后，MuseScore 里显示为 `MuseSync`。从 MuseTone 升级则使用相同 UID 和路径，直接更新已有安装。
 
 ## 当前工程同步
 
-部署脚本同时安装 `MuseTone Sync` 到 MuseScore 的 plugins 目录。重启 MuseScore 后，
+部署脚本同时安装 `MuseSync Bridge` 到 MuseScore 的 plugins 目录。重启 MuseScore 后，
 在插件管理中启用它，并在每次 MuseScore 会话中从插件菜单运行一次。
 它在后台读取当前打开谱面的速度表、拍号和中途变化，不需要手动导入或保存谱子。
 VST3 的「当前谱面」按钮可刷新连接；没有信息时保留默认网格并标注来源。
@@ -102,11 +105,11 @@ VST3 的「当前谱面」按钮可刷新连接；没有信息时保留默认网
 - 起始偏移增加 `-` / `+` 按钮和滚轮调节，默认每次 `10 ms`，按住 Shift 时为 `1 ms`。
 - 半音、音分和手动 BPM 输入框支持滚轮，保留高精度滚轮的不足一格增量。
   半音和音分输入有效整数后立即请求变调，不需要先点击其他控件。
-- 普通单击波形向新版 `MuseTone Sync` 请求谱面跳转并开始播放；拖动仍平移视野。
+- 普通单击波形向新版 `MuseSync Bridge` 请求谱面跳转并开始播放；拖动仍平移视野。
   跳转先扣除起始偏移，再选择对应时间之前最近的音符或休止符，交由 MuseScore 播放。
   不单独启动伴奏，伴奏继续跟随宿主时间轴，避免两边不同步。
 - 跳转使用 `MuseToneCommands.ini` 请求通道，并校验当前谱面 session 和请求有效期。
-  需要启用并运行新版 `MuseTone Sync`；优先使用 MuseScore 光标的谱面时间，
+  需要启用并运行新版 `MuseSync Bridge`；优先使用 MuseScore 光标的谱面时间，
   旧接口回退到按速度积分。反复展开、临时播放速度倍率和旧接口下的变速仍有精度限制。
 
 ## 变调实现说明

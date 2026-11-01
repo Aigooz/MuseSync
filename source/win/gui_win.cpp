@@ -1155,7 +1155,7 @@ void WinView::paintChrome (HDC dc)
                      align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
     };
     ::SetBkMode (dc, TRANSPARENT);
-    text (L"MuseTone", {20, 18, 116, 28}, m_fontBold, kInk);
+    text (L"MuseSync", {20, 18, 116, 28}, m_fontBold, kInk);
     text (m_fileText, l.file, m_font, kInk);
     text (m_transportText, l.transport, m_fontSmall, kMuted);
     text (m_timeText, l.time, m_font, kInk);
@@ -1640,16 +1640,17 @@ void WinView::setCollapsed (bool collapsed)
         wchar_t title[128] {};
         ::GetWindowTextW (root, title, 128);
         m_editorShell = root != m_hwnd && (::GetWindow (root, GW_OWNER) ||
-                                          std::wcscmp (title, L"MuseTone") == 0) ? root : nullptr;
+                                          (std::wcscmp (title, L"MuseSync") == 0 ||
+                                           std::wcscmp (title, L"MuseTone") == 0)) ? root : nullptr;
         if (!m_floating)
         {
             HWND owner = m_editorShell ? ::GetWindow (m_editorShell, GW_OWNER) : root;
             m_floating = ::CreateWindowExW (WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-                kFloatingClass, L"MuseTone", WS_POPUP | WS_CLIPCHILDREN,
+                kFloatingClass, L"MuseSync", WS_POPUP | WS_CLIPCHILDREN,
                 anchor.left, anchor.top, px (260), px (58), owner, nullptr,
                 ::GetModuleHandleW (nullptr), this);
             if (!m_floating) return;
-            m_expandBtn = ::CreateWindowExW (0, L"BUTTON", L"展开 MuseTone",
+            m_expandBtn = ::CreateWindowExW (0, L"BUTTON", L"展开 MuseSync",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 px (220), px (11), px (32), px (36), m_floating,
                 reinterpret_cast<HMENU> (IDC_EXPAND), ::GetModuleHandleW (nullptr), nullptr);
@@ -1662,7 +1663,7 @@ void WinView::setCollapsed (bool collapsed)
                 tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
                 tool.hwnd = m_floating;
                 tool.uId = reinterpret_cast<UINT_PTR> (m_expandBtn);
-                tool.lpszText = const_cast<wchar_t*> (L"展开 MuseTone");
+                tool.lpszText = const_cast<wchar_t*> (L"展开 MuseSync");
                 ::SendMessageW (m_tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM> (&tool));
             }
         }
@@ -1717,7 +1718,7 @@ void WinView::paintFloating (HDC dc)
     ::SelectObject (dc, m_font);
     ::SetTextColor (dc, kInk);
     RECT title {px (14), px (8), px (206), px (28)};
-    ::DrawTextW (dc, L"MuseTone", -1, &title, DT_SINGLELINE | DT_VCENTER);
+    ::DrawTextW (dc, L"MuseSync", -1, &title, DT_SINGLELINE | DT_VCENTER);
     ::SelectObject (dc, m_fontSmall);
     ::SetTextColor (dc, kMuted);
     RECT status {px (14), px (30), px (208), px (49)};
@@ -1787,7 +1788,7 @@ void WinView::paintHelp (HDC dc)
     struct Section { const wchar_t* title; const wchar_t* body; };
     static const Section guide[] = {
         {L"01  载入音频", L"点「打开音频」或拖入文件。支持 MP3 / WAV / M4A / AAC / FLAC / OGG。\n在乐谱或插件中按空格，跟随宿主播放与暂停。"},
-        {L"02  连接当前谱面", L"从插件菜单运行 MuseTone Sync，弹窗确认已开启。速度、拍号随谱面变化，切换谱面后刷新。\n关闭「跟随谱面」可手动填写，点波形顶部拍号块可设置换拍。"},
+        {L"02  连接当前谱面", L"从插件菜单运行 MuseSync Bridge，弹窗确认已开启。速度、拍号随谱面变化，切换谱面后刷新。\n关闭「跟随谱面」可手动填写，点波形顶部拍号块可设置换拍。"},
         {L"03  对齐第一拍", L"按住 Ctrl 或 Alt 拖动网格，将第 1 小节线对准音乐第一拍；加按 Shift 可微调。\n起始偏移支持毫秒输入，旁边的回转箭头可清零。"},
         {L"04  移调与音量", L"半音 ±24，音分 ±100，两项叠加。变调在后台生成，不改变整曲时长。\n回转箭头恢复原音，底部滑条调整音量。"},
         {L"05  浏览与定位", L"拖动或滚轮平移；Ctrl / Alt + 滚轮缩放；双击整曲全览。点击波形或拖动时间旁的进度条可定位谱面并播放。\n红线为音频、绿线为谱面。错位时点「回到播放头」，仍异常则重启宿主。"},
@@ -1827,7 +1828,7 @@ void WinView::paintHelp (HDC dc)
               DT_WORDBREAK | DT_EDITCONTROL);
     }
     text (L"关于", {l.about.x, l.about.y, 64, 20}, m_font, kInk, DT_SINGLELINE);
-    text (L"MuseTone  ·  音频与曲谱同步", {l.about.x + 72, l.about.y, l.about.w - 72, 20},
+    text (L"MuseSync  ·  谱伴同步", {l.about.x + 72, l.about.y, l.about.w - 72, 20},
           m_font, kInk, DT_SINGLELINE);
     text (L"基于 DaweiDrumScore 开源项目  /  GPL-3.0", {l.about.x + 72, l.about.y + 23, l.about.w - 72, 18},
           m_fontSmall, kMuted, DT_SINGLELINE);
@@ -2799,9 +2800,9 @@ void WinView::syncCurrentScore (bool showStatus)
     requestWaveRepaint (false);
     if (!connected)
         ::MessageBoxW (m_hwnd,
-            L"尚未连接当前谱面。请在 MuseScore 的插件管理中启用 MuseTone Sync，"
+            L"尚未连接当前谱面。请在 MuseScore 的插件管理中启用 MuseSync Bridge，"
             L"然后从插件菜单运行一次。之后切换工程、修改速度和拍号会自动同步，无需导入或保存谱子。",
-            L"MuseTone", MB_OK | MB_ICONINFORMATION);
+            L"MuseSync", MB_OK | MB_ICONINFORMATION);
 }
 
 // 新载入音频的默认视野：放大到「前几小节」，从起始偏移处开始看，而不是整曲全览
@@ -3140,8 +3141,8 @@ void WinView::seekFromAudio (double audioSec)
     const double scoreSec = std::max (0.0, audioSec - m_backend->offsetSec ());
     if (!ap::requestScoreSeek (scoreSec, ap::scoreBridgeNowMs ()))
         ::MessageBoxW (m_hwnd,
-            L"谱面跳转需要新版 MuseTone Sync。请重启 MuseScore，再从插件菜单运行 MuseTone Sync。",
-            L"MuseTone", MB_OK | MB_ICONINFORMATION);
+            L"谱面跳转需要新版 MuseSync Bridge。请重启 MuseScore，再从插件菜单运行 MuseSync Bridge。",
+            L"MuseSync", MB_OK | MB_ICONINFORMATION);
     else
     {
         m_userScrolling = false;

@@ -683,6 +683,9 @@ void hiddenControlTests (const std::filesystem::path& wave)
     SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1029, BN_CLICKED), 0);
     HWND floating = FindWindowExW (nullptr, nullptr, L"MuseToneFloatingView", nullptr);
     check (floating && GetDlgItem (floating, 1030), "collapse creates floating strip with expand control");
+    wchar_t expandLabel[64] {};
+    GetWindowTextW (GetDlgItem (floating, 1030), expandLabel, 64);
+    check (std::wcscmp (expandLabel, L"展开 MuseSync") == 0, "floating expand control uses MuseSync brand");
     checkFloatingPosition (floating);
     check (!(GetWindowLongPtrW (panel, GWL_STYLE) & WS_VISIBLE), "collapsed editor panel is hidden");
     check (!IsWindowVisible (floating), "hidden regression host never shows floating UI");
@@ -719,7 +722,7 @@ void hiddenControlTests (const std::filesystem::path& wave)
     // An owned hidden dialog models MuseScore's editor without showing a window.
     HWND application = CreateWindowExW (0, L"STATIC", L"Hidden MuseScore application", WS_OVERLAPPED,
                                         0, 0, 1000, 700, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
-    HWND editor = CreateWindowExW (0, L"STATIC", L"MuseTone", WS_OVERLAPPED,
+    HWND editor = CreateWindowExW (0, L"STATIC", L"MuseSync", WS_OVERLAPPED,
                                    0, 0, 1000, 700, application, nullptr, GetModuleHandleW (nullptr), nullptr);
     auto* ownedView = new ap::PlugView (&backend);
     check (ownedView->attached (editor, kPlatformTypeHWND) == kResultOk, "attach owned editor shell");
@@ -742,6 +745,23 @@ void hiddenControlTests (const std::filesystem::path& wave)
     ownedView->release ();
     DestroyWindow (editor);
     DestroyWindow (application);
+
+    for (const wchar_t* name : {L"MuseTone", L"MuseSync"})
+    {
+        HWND shell = CreateWindowExW (0, L"STATIC", name, WS_OVERLAPPED,
+            0, 0, 1000, 700, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
+        auto* shellView = new ap::PlugView (&backend);
+        check (shellView->attached (shell, kPlatformTypeHWND) == kResultOk, "attach branded editor shell");
+        HWND shellPanel = FindWindowExW (shell, nullptr, L"MuseToneMainView", nullptr);
+        SendMessageW (shellPanel, WM_COMMAND, MAKEWPARAM (1029, BN_CLICKED), 0);
+        HWND strip = FindWindowExW (nullptr, nullptr, L"MuseToneFloatingView", nullptr);
+        check (strip && !GetWindow (strip, GW_OWNER), "old and new standalone editor titles are recognized");
+        SendMessageW (strip, WM_COMMAND, MAKEWPARAM (1030, BN_CLICKED), 0);
+        check ((GetWindowLongPtrW (shellPanel, GWL_STYLE) & WS_VISIBLE) != 0, "branded shell expands");
+        shellView->removed ();
+        shellView->release ();
+        DestroyWindow (shell);
+    }
 }
 
 void pitchOutputTests (const std::filesystem::path& wave)
