@@ -1,0 +1,1330 @@
+//==============================================================================
+// gui_repro.mm — 复现「点开音频 / 拖入文件 → 宿主闪退」
+//
+// 为什么需要它：
+//   MuseScore 里的崩溃日志只给出方法名和偏移，无法确定是哪一条指令、
+//   更无法在改动后确认修好了。这个程序直接把真实的 GUIView 建出来，
+//   按崩溃日志里的时序驱动它，用退出码给出可机读的结论。
+//
+// 复现的时序（与 APLAY.log 中的崩溃现场一致）：
+//   A. 建视图 → 让 autorelease 池排空 → 调用 loadPath:
+//      （对应 loadPath: 里给 offsetSlider 发消息的那次崩溃）
+//   B. 建视图 → 池排空 → 调用 hasAudioURL: 两次
+//      （对应 hasAudioURL: 里给静态 NSSet 发消息的那次崩溃）
+//
+// 用法: gui_repro <load|drag> <音频文件>
+//   退出码 0 = 正常，非 0 = 复现/异常
+//==============================================================================
+
+#include "gui.h"
+#include "audiofile.h"
+#include "crashguard.h"
+
+#import <AppKit/AppKit.h>
+#import <objc/message.h>
+
+#include <cmath>
+#include <cstdio>
+#include <map>
+#include <string>
+
+//------------------------------------------------------------------------------
+// 测试后端：直接用 Player，等价于插件里 StableBackend 转发到处理器后的行为
+//------------------------------------------------------------------------------
+class TestBackend : public ap::PlugView::Backend
+{
+public:
+    bool loadFile (const std::string& path) override
+    {
+        ap::AudioData d;
+        std::string err;
+        if (!ap::decodeAudioFile (path, d, err)) { m_err = err; return false; }
+        return m_player.setAudio (std::move (d));
+    }
+    void unloadFile () override { m_player.clearAudio (); }
+    bool hasAudio () const override { return m_player.hasAudio (); }
+    double durationSec () const override { return m_player.durationSec (); }
+    std::string currentPath () const override { return m_path; }
+    std::string lastError () const override { return m_err; }
+
+    void waveformPeaks (std::vector<float>& out, int buckets,
+                        double fromSec, double toSec) const override
+    {
+        out.assign (static_cast<size_t> (buckets > 0 ? buckets : 1), 0.f);
+        m_player.withAudio ([&] (const ap::AudioData& d)
+        {
+            const size_t n = d.numFrames ();
+            if (n == 0 || d.sampleRate == 0) return;
+
+            double f0 = fromSec, f1 = toSec;
+            if (!(f1 > f0)) { f0 = 0.0; f1 = d.durationSec (); }
+            if (f0 < 0.0) f0 = 0.0;
+            if (f1 > d.durationSec ()) f1 = d.durationSec ();
+            if (f1 <= f0) return;
+
+            size_t s0 = static_cast<size_t> (f0 * d.sampleRate);
+            size_t s1 = static_cast<size_t> (f1 * d.sampleRate);
+            if (s0 >= n) return;
+            if (s1 > n) s1 = n;
+            if (s1 <= s0) return;
+
+            const size_t b = out.size ();
+            const double span = static_cast<double> (s1 - s0);
+            for (size_t i = 0; i < b; ++i)
+            {
+                const size_t a0 = s0 + static_cast<size_t> (span * i / b);
+                size_t a1 = s0 + static_cast<size_t> (span * (i + 1) / b);
+                if (a1 <= a0) a1 = a0 + 1;
+                if (a1 > s1) a1 = s1;
+                float peak = 0.f;
+                for (size_t j = a0; j < a1; ++j)
+                {
+                    const float a = std::fabs (d.samples[j * d.numChannels]);
+                    if (a > peak) peak = a;
+                }
+                out[i] = peak;
+            }
+        });
+    }
+
+    void setOffsetSec (float s) override { m_player.setStartOffsetSec (s); }
+    float offsetSec () const override { return m_player.startOffsetSec (); }
+    void setVolume (float v) override { m_player.setVolume (v); }
+    float volume () const override { return m_player.volume (); }
+    void setPlaying (bool b) override { m_player.setPlaying (b); }
+    bool playing () const override { return m_player.playing (); }
+    void setLooping (bool b) override { m_player.setLooping (b); }
+    bool looping () const override { return m_player.looping (); }
+    void seekTo (double s) override { ++seekCalls; m_player.seekTo (s); }
+    double positionSec () const override { return m_player.positionSec (); }
+
+    void setGridBPM (float bpm) override { m_bpm = bpm; }
+    float gridBPM () const override { return m_bpm; }
+    void setGridBeatsPerBar (int b) override { m_beats = b; }
+    int gridBeatsPerBar () const override { return m_beats; }
+    void setGridBeatDenominator (int d) override { m_denom = d; }
+    int gridBeatDenominator () const override { return m_denom; }
+
+    // 假的宿主时间轴：默认「宿主没给」，测试时可按需打开，
+    // 用来走通「自动跟随乐谱速度 + 画谱面播放头」这条分支。
+    // fakePlayheadSec 可改：用来分别驱动「播放头自己在走」和「宿主把它挪走了」。
+    ap::PlugView::Backend::HostTimeline hostTimeline () const override
+    {
+        ap::PlugView::Backend::HostTimeline t;
+        t.tempoValid = fakeTimeline;
+        t.bpm = 120.0f;
+        t.timeSigValid = fakeTimeline;
+        t.beatsPerBar = 4;
+        t.playheadValid = fakeTimeline;
+        t.playheadSec = fakePlayheadSec;
+        t.playing = fakePlaying;
+        return t;
+    }
+
+    bool fakeTimeline = false;
+    bool fakePlaying = true;        ///< 假宿主的播放/暂停（用来测「暂停时换小节」）
+    double fakePlayheadSec = 3.5;   ///< 假宿主播放头位置（秒）
+    int  seekCalls = 0;   ///< seekTo 被调用次数 —— 回归防线：拖动波形不该 seek
+
+    // 视野状态：真实后端存在处理器里（关掉编辑器再打开要恢复，见 gui.h）。
+    // 这里同样存成员，才能复现「同一个后端上再挂一个编辑器视图」的场景。
+    void setViewState (double startSec, double spanSec) override
+    {
+        viewStartSaved = startSec;
+        viewSpanSaved = spanSec;
+    }
+    void getViewState (double& startSec, double& spanSec) const override
+    {
+        startSec = viewStartSaved;
+        spanSec = viewSpanSaved;
+    }
+    double viewStartSaved = 0.0;   ///< 后端里存的视野（测试直接读，便于打印诊断）
+    double viewSpanSaved  = 0.0;
+
+    // 拍号变化表：真实后端按小节存在处理器里，这里同样按小节存，
+    // 否则「点方块 → 弹层 → 应用」这条链在复现程序里永远是空表，测不出东西。
+    void getTimeSigChanges (std::vector<ap::TimeSigChange>& out) const override
+    {
+        out.clear ();
+        for (const auto& kv : m_tsChanges) out.push_back (kv.second);
+    }
+    void setTimeSigChange (int bar, int beats, int denom) override
+    {
+        if (bar < 1) bar = 1;
+        ap::TimeSigChange c;
+        c.bar   = bar;
+        c.beats = ap::normalizeBeatsPerBar (beats, 4);
+        c.denom = ap::normalizeBeatDenom (denom, 4);
+        m_tsChanges[bar] = c;
+    }
+    void clearTimeSigChange (int bar) override { m_tsChanges.erase (bar); }
+    std::map<int, ap::TimeSigChange> m_tsChanges;
+
+private:
+    mutable ap::Player m_player;
+    std::string m_path;
+    std::string m_err;
+    float m_bpm = 0.0f;   ///< 0 = 自动
+    int   m_beats = 4;
+    int   m_denom = 4;
+};
+
+//------------------------------------------------------------------------------
+// 假的拖放信息：只要能被问出 draggingPasteboard 就够了，
+// 因为 hasAudioURL: 内部只用到这一个方法（ObjC 是动态派发，无需真实现协议）
+//------------------------------------------------------------------------------
+@interface FakeDrag : NSObject
+{
+    NSPasteboard* _pb;
+}
+- (instancetype)initWithPasteboard:(NSPasteboard*)pb;
+- (NSPasteboard*)draggingPasteboard;
+@end
+
+@implementation FakeDrag
+- (instancetype)initWithPasteboard:(NSPasteboard*)pb
+{
+    if (self = [super init]) _pb = [pb retain];
+    return self;
+}
+- (void)dealloc { [_pb release]; [super dealloc]; }
+- (NSPasteboard*)draggingPasteboard { return _pb; }
+@end
+
+//------------------------------------------------------------------------------
+// 把 GUIView 的动作声明出来（实现体在 gui.mm 里，这里只做编译期声明）
+//------------------------------------------------------------------------------
+@interface NSView (APLAYRepro)
+- (void)loadPath:(NSString*)path;
+- (BOOL)hasAudioURL:(id<NSDraggingInfo>)sender;
+- (void)tick;
+- (void)stopTimer;
+- (void)stopDrag;
+// 只读自测访问器（实现在 gui.mm 的 GUIView 里）
+- (double)bpmFieldValue;
+- (NSString*)beatsSelection;
+// 拍号条（实现在 gui.mm 的 WaveformView 里）：块数与每块的小节号 / 拍号 / 中心 x。
+// ⭐ 几何一律从实现里问出来，测试不抄布局常数。
+- (int)timeSigBoxCount;
+- (int)timeSigBoxBarAtIndex:(int)i;
+- (int)timeSigBoxBeatsAtIndex:(int)i;
+- (int)timeSigBoxDenomAtIndex:(int)i;
+- (BOOL)timeSigBoxChangedAtIndex:(int)i;
+- (CGFloat)timeSigBoxMidXAtIndex:(int)i;
+// 拍号弹层（实现在 gui.mm 的 TimeSigPopupView / GUIView 里）
+- (NSPoint)tsButtonMidPointForKind:(int)kind value:(int)value;
+- (BOOL)tsPopupVisible;
+@end
+
+//------------------------------------------------------------------------------
+// 递归找到波形视图（类名叫 WaveformView，不需要 import 就能按名字判断）
+//------------------------------------------------------------------------------
+static NSView* findWaveView (NSView* v)
+{
+    for (NSView* s in [v subviews])
+    {
+        if ([NSStringFromClass ([s class]) isEqualToString:@"WaveformView"])
+            return s;
+        NSView* r = findWaveView (s);
+        if (r) return r;
+    }
+    return nil;
+}
+
+/// 按类名递归找子树里的视图（拍号弹层 = "TimeSigPopupView"）
+static NSView* findViewByClass (NSView* v, NSString* cls)
+{
+    for (NSView* s in [v subviews])
+    {
+        if ([NSStringFromClass ([s class]) isEqualToString:cls])
+            return s;
+        NSView* r = findViewByClass (s, cls);
+        if (r) return r;
+    }
+    return nil;
+}
+
+//------------------------------------------------------------------------------
+// 离屏渲染：真的跑一遍 drawRect（网格循环、包络绘制都在里面）。
+// 之前只验证「能建出视图」，绘制代码里的死循环 / 除零照样能溜过去。
+//------------------------------------------------------------------------------
+static int drawOffscreen (NSView* v)
+{
+    const NSRect b = [v bounds];
+    const int w = (int) b.size.width, h = (int) b.size.height;
+    if (w < 2 || h < 2) return 0;
+
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB ();
+    CGContextRef cg = CGBitmapContextCreate (nullptr, (size_t) w, (size_t) h, 8,
+                                             (size_t) (w * 4), cs,
+                                             kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease (cs);
+    if (!cg) return 0;
+
+    NSGraphicsContext* ctx = [NSGraphicsContext graphicsContextWithCGContext:cg flipped:YES];
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:ctx];
+    [v displayRectIgnoringOpacity:b inContext:ctx];
+    [NSGraphicsContext restoreGraphicsState];
+    CGContextRelease (cg);
+    return 1;
+}
+
+static void step (const char* what)
+{
+    std::printf ("  · %s\n", what);
+    std::fflush (stdout);
+}
+
+// 宿主窗口：真实的 MuseScore 里编辑器是嵌在窗口里的，坐标转换依赖窗口存在。
+// 这里建一个不显示的窗口，让 [view convertPoint:fromView:nil] 有确定语义
+// —— 否则合成的鼠标事件位置没有意义、断言也就失去价值。
+static NSWindow* g_hostWindow = nil;
+
+int main (int argc, char** argv)
+{
+    const char* mode = argc > 1 ? argv[1] : "load";
+    const char* file = argc > 2 ? argv[2] : nullptr;
+
+    @autoreleasepool { [NSApplication sharedApplication]; }
+
+    std::printf ("[复现] 模式=%s\n", mode);
+    std::fflush (stdout);
+
+    TestBackend backend;
+    NSView* guiView = nil;
+    ap::PlugView* pvRef = nullptr;   // 供「宿主改尺寸」用例复用（挂载用的那个视图）
+
+    // ---- 1. 模拟宿主挂载编辑器视图（时序与 MuseScore 一致）----
+    @autoreleasepool
+    {
+        g_hostWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect (0, 0, 620, 460)
+                                                   styleMask:NSWindowStyleMaskBorderless
+                                                     backing:NSBackingStoreBuffered
+                                                       defer:NO];
+        NSView* container = [g_hostWindow contentView];
+
+        auto* pv = new ap::PlugView (&backend, nullptr);
+        pv->addRef ();
+        pvRef = pv;
+        const Steinberg::tresult r =
+            pv->attached ((__bridge void*) container, Steinberg::kPlatformTypeNSView);
+        // 由宿主持有，本进程不释放插件视图对象
+
+        step (r == Steinberg::kResultOk ? "编辑器视图挂载成功" : "编辑器视图挂载失败");
+
+        NSArray* subs = [container subviews];
+        if (subs.count == 0)
+        {
+            std::printf ("[复现] 视图未被挂载，无法继续\n");
+            return 2;
+        }
+        guiView = [[subs objectAtIndex:subs.count - 1] retain];   // MRC 文件，自己持有
+    }
+    // ★ 关键：这里的池排空，模拟「编辑器打开后过了几秒」
+    step ("autorelease 池已排空（模拟编辑器打开数秒后）");
+
+    int rc = 0;
+
+    // ---- ⭐ 宿主改尺寸：面板变宽后，波形区必须跟着变宽 ----
+    // 背景：MuseScore 会把插件编辑器窗口钉死在我们 getSize() 报的尺寸上，用户拖不动
+    // （见经验总结第 13 章）。所以「面板会不会更宽」只取决于宿主 —— 而宿主一旦给出
+    // 新尺寸，就必须走这条调用链：
+    //   checkSizeConstraint（钳制） → onSize（通知新尺寸） → 子视图按 mask 重排。
+    // ⚠️ 顺带验证高度被压回 384 —— 本端只放开宽度，纵向位置与帮助层行数预算
+    //    都是按 384 排的。
+    @autoreleasepool
+    {
+        NSView* waveBefore = findWaveView (guiView);
+        const CGFloat waveWBefore = waveBefore ? waveBefore.frame.size.width : 0.0;
+
+        Steinberg::ViewRect want {};
+        want.right  = 900;
+        want.bottom = 500;   // 故意给一个 ≠384 的高度
+        pvRef->checkSizeConstraint (&want);
+
+        std::printf ("  · 宿主给的 900x500 → 钳制为 %dx%d\n",
+                     (int) want.getWidth (), (int) want.getHeight ());
+        std::fflush (stdout);
+
+        pvRef->onSize (&want);
+
+        const NSSize  panel  = guiView.frame.size;
+        NSView*       wave2  = findWaveView (guiView);
+        const CGFloat waveW  = wave2 ? wave2.frame.size.width : 0.0;
+
+        std::printf ("  · 面板 %.0fx%.0f，波形区宽 %.0f → %.0f\n",
+                     panel.width, panel.height, waveWBefore, waveW);
+        std::fflush (stdout);
+
+        bool ok = true;
+        if (panel.width != 900 || panel.height != 384)  ok = false;
+        if (std::fabs (waveW - 872.0) > 0.5)            ok = false;   // 900 - 左右各 14
+        if (wave2 && std::fabs (NSMaxX (wave2.frame) - 886.0) > 0.5) ok = false;
+
+        // 帮助覆盖层必须铺满新宽度，否则面板变宽后右侧会露出一条没被盖住的面板
+        bool overlayOk = false;
+        for (NSView* sv in [guiView subviews])
+            if ([NSStringFromClass ([sv class]) isEqualToString:@"HelpOverlayView"])
+                overlayOk = std::fabs (sv.frame.size.width - 900.0) < 0.5;
+        if (!overlayOk)
+        {
+            std::printf ("  · ✗ 帮助覆盖层没有跟着变宽（面板变宽后右侧会漏出面板）\n");
+            ok = false;
+        }
+
+        if (!ok)
+        {
+            std::printf ("[复现] ✗ 面板变宽后布局没有跟着变（波形区 / 覆盖层宽度不对）\n");
+            rc = 36;
+        }
+        else
+        {
+            step ("宿主改尺寸后波形区与帮助覆盖层同步变宽");
+        }
+
+        // 复原成 640 宽：后面的用例都按这块坐标系算鼠标位置
+        Steinberg::ViewRect back {};
+        back.right  = 640;
+        back.bottom = 384;
+        pvRef->onSize (&back);
+    }
+
+    // ---- 子视图断言：音量滑块必须真的挂进视图层级 ----
+    // 之前滑块既没 addSubview 也没 retain —— 结果是「界面上看不见」
+    // 并且「池排空后变成野指针」。这条断言同时锁住这两件事。
+    @autoreleasepool
+    {
+        int sliders = 0;
+        NSArray* subs = [guiView subviews];
+        for (NSView* sv in subs)
+            if ([sv isKindOfClass:[NSSlider class]]) ++sliders;
+
+        std::printf ("  · 界面控件: 共 %lu 个子视图，其中滑块 %d 个\n",
+                     (unsigned long) subs.count, sliders);
+        std::fflush (stdout);
+
+        if (sliders < 1)
+        {
+            std::printf ("[复现] ✗ 滑块未挂进视图（音量滑块缺失）\n");
+            rc = 4;
+        }
+    }
+
+    if (std::strcmp (mode, "load") == 0)
+    {
+        if (!file)
+        {
+            std::printf ("[复现] 缺少音频文件参数\n");
+            return 2;
+        }
+        NSString* path = [NSString stringWithUTF8String:file];
+        step ("调用 loadPath:（等价于界面里点『打开音频』/拖入文件）");
+        @autoreleasepool
+        {
+            [guiView loadPath:path];
+        }
+        step ("loadPath: 正常返回");
+
+        // ---- ⭐ 新载入音频的默认视野：8 秒，而不是整曲全览 ----
+        // 用户实测：「默认把波形放大到按 12 次还是 11 次的大小」。
+        // 全览时波峰糊成一片，每次都要先手动放大好多下 —— 所以载入后直接给一个
+        // 能看清鼓点的视野（8 秒 ≈ 4 小节 @120BPM 4/4）。
+        // ⚠️ 期望值这里【独立写死 8.0】，故意不引用源码里的常量：测试要有自己的
+        //    判据，否则常量被改错了两边一起错，断言等于没写。
+        {
+            NSView* wv = findWaveView (guiView);
+            SEL selLen = NSSelectorFromString (@"viewLenSec");
+            const double dur = backend.durationSec ();
+            const double len = (wv && [wv respondsToSelector:selLen])
+                             ? ((double (*) (id, SEL)) objc_msgSend) (wv, selLen) : 0.0;
+
+            std::printf ("  · 载入后：曲长 %.2f 秒，默认视野 %.2f 秒（期望 8 秒）\n", dur, len);
+
+            if (dur <= 8.001)
+            {
+                std::printf ("  · （测试音频只有 %.2f 秒 ≤ 默认视野，按全览处理；跳过断言）\n", dur);
+            }
+            else if (len <= 0.0 || len > 8.05)
+            {
+                std::printf ("[复现] ✗ 载入后默认视野 %.3f 秒，期望 8 秒"
+                             "（全览的话波峰看不清，得手动放大）\n", len);
+                rc = 34;
+            }
+            else
+            {
+                step ("载入后默认视野放大到 8 秒（不是整曲全览）");
+            }
+        }
+    }
+    else if (std::strcmp (mode, "drag") == 0)
+    {
+        if (!file)
+        {
+            std::printf ("[复现] 缺少音频文件参数\n");
+            return 2;
+        }
+
+        NSPasteboard* pb = [NSPasteboard pasteboardWithUniqueName];
+        [pb declareTypes:@[ NSPasteboardTypeFileURL ] owner:nil];
+        [pb setString:[NSURL fileURLWithPath:[NSString stringWithUTF8String:file]].absoluteString
+              forType:NSPasteboardTypeFileURL];
+
+        FakeDrag* drag = [[FakeDrag alloc] initWithPasteboard:pb];
+        BOOL first = NO;
+
+        // 第 1 次：拖拽刚进入视图
+        @autoreleasepool
+        {
+            step ("第 1 次 hasAudioURL:（拖拽进入）");
+            first = [guiView hasAudioURL:(id<NSDraggingInfo>) drag];
+        }
+        step (first ? "第 1 次返回「是音频文件」（说明这条路径真的走到了）"
+                    : "第 1 次返回「否」——测试没命中目标路径，需调整");
+
+        // 第 2 次：拖拽过程中再次询问（AppKit 会重复询问）
+        @autoreleasepool
+        {
+            step ("第 2 次 hasAudioURL:（同一个拖拽会话中再次询问）");
+            const BOOL second = [guiView hasAudioURL:(id<NSDraggingInfo>) drag];
+            step (second ? "第 2 次返回「是音频文件」" : "第 2 次返回「否」");
+        }
+
+        [drag release];
+        [pb release];
+        if (rc == 0) rc = first ? 0 : 3;
+    }
+    else if (std::strcmp (mode, "grid") == 0)
+    {
+        if (!file)
+        {
+            std::printf ("[复现] 缺少音频文件参数\n");
+            return 2;
+        }
+        NSString* path = [NSString stringWithUTF8String:file];
+
+        // ---- 载入 ----
+        @autoreleasepool { [guiView loadPath:path]; }
+        step ("已载入音频");
+
+        NSView* wave = findWaveView (guiView);
+        if (!wave)
+        {
+            std::printf ("[复现] ✗ 找不到波形视图\n");
+            return 5;
+        }
+
+        // ---- 面板控件清点（少了任何一个都是功能缺失）----
+        int sliders = 0, buttons = 0, fields = 0, popups = 0, steppers = 0;
+        for (NSView* sv in [guiView subviews])
+        {
+            if ([sv isKindOfClass:[NSSlider class]])      ++sliders;
+            if ([sv isKindOfClass:[NSButton class]])      ++buttons;
+            if ([sv isKindOfClass:[NSTextField class]])   ++fields;
+            if ([sv isKindOfClass:[NSPopUpButton class]]) ++popups;
+            if ([sv isKindOfClass:[NSStepper class]])     ++steppers;
+        }
+        std::printf ("  · 面板控件: 滑块 %d，按钮 %d，文本框 %d，下拉 %d，步进 %d\n",
+                     sliders, buttons, fields, popups, steppers);
+
+        // 偏移改由「波形上 ⌘/⌥拖动」操作，偏移滑块/微调按钮已删除。
+        // 循环按钮已删除（「跟谱面走」模式下无实际作用）。
+        // 需要存在的按钮：打开 / ？帮助 / 缩小 / 放大 / 全览 / 回到播放头 /
+        // 播放 / 归零（+ 网格、小节号两个勾选框），1 个 BPM 步进器，拍号 N/M。
+        if (sliders < 1)   { std::printf ("[复现] ✗ 滑块缺失\n");   rc = 6; }
+        if (buttons < 6)   { std::printf ("[复现] ✗ 按钮数量不足\n"); rc = 7; }
+        if (fields < 5)    { std::printf ("[复现] ✗ 文本框缺失\n"); rc = 8; }
+        if (popups < 1)    { std::printf ("[复现] ✗ 拍号下拉缺失\n"); rc = 9; }
+        if (steppers < 1)  { std::printf ("[复现] ✗ BPM 步进缺失\n"); rc = 10; }
+
+        // ---- 「归零」按钮：起始偏移一键清零 ----
+        // 用户实测点名要的功能：改偏移只有「波形上 ⌘/⌥拖动」一个入口，手滑拖到
+        // 很大的值之后只能反向拖回去（可能要拖好几个屏）。这里真的点一下按钮，
+        // 检查后端里的偏移是否被清零（不是只验「控件存在」）。
+        {
+            NSButton* zeroBtn = nil;
+            for (NSView* sv in [guiView subviews])
+            {
+                if ([sv isKindOfClass:[NSButton class]] &&
+                    [[(NSButton*) sv title] isEqualToString:@"归零"])
+                {
+                    zeroBtn = (NSButton*) sv;
+                    break;
+                }
+            }
+
+            if (!zeroBtn)
+            {
+                std::printf ("[复现] ✗ 找不到「归零」按钮（偏移没法一键清零）\n");
+                rc = 32;
+            }
+            else
+            {
+                backend.setOffsetSec (12.5f);
+                [zeroBtn performClick:nil];
+                if (std::fabs (backend.offsetSec ()) > 1e-6f)
+                {
+                    std::printf ("[复现] ✗ 点了「归零」偏移仍为 %.3f\n",
+                                 (double) backend.offsetSec ());
+                    rc = 32;
+                }
+                else
+                {
+                    step ("「归零」按钮把起始偏移清零");
+                }
+            }
+        }
+
+        // ---- 页脚宣传语：必须是「可点击链接」，且接到正确的主页地址 ----
+        // ⚠️ 只验接线，绝不调用 mouseDown: —— 那会把浏览器真的拉起来。
+        //    自动化测试里弹浏览器是不可接受的副作用，所以走只读的 brandUrl 访问器。
+        {
+            NSView* brand = nil;
+            for (NSView* sv in [guiView subviews])
+            {
+                if ([[[sv class] description] isEqualToString:@"BrandLinkField"])
+                {
+                    brand = sv;
+                    break;
+                }
+            }
+
+            SEL selUrl = NSSelectorFromString (@"brandUrl");
+            NSString* u = (brand && [brand respondsToSelector:selUrl])
+                        ? ((id (*) (id, SEL)) objc_msgSend) (brand, selUrl) : nil;
+
+            if (!brand)
+            {
+                std::printf ("[复现] ✗ 页脚宣传语不是可点击控件（BrandLinkField 缺失）\n");
+                rc = 31;
+            }
+            else if (!u || std::strcmp ([u UTF8String], ap::kBrandHomeUrl) != 0)
+            {
+                std::printf ("[复现] ✗ 页脚跳转地址不对：%s（期望 %s）\n",
+                             u ? [u UTF8String] : "(nil)", ap::kBrandHomeUrl);
+                rc = 31;
+            }
+            else
+            {
+                step ("页脚宣传语是可点击链接，地址正确");
+            }
+        }
+
+        // ---- 网格绘制：宿主没给时间轴（退回默认 120 BPM / 4/4）----
+        backend.fakeTimeline = false;
+        backend.setGridBeatsPerBar (4);
+        backend.setGridBeatDenominator (4);
+        if (!drawOffscreen (wave)) { std::printf ("[复现] ✗ 离屏渲染失败\n"); rc = 11; }
+        else step ("绘制网格（默认 120 BPM，4/4）");
+
+        // ---- 网格绘制：宿主给了速度/拍号/谱面位置 ----
+        backend.fakeTimeline = true;
+        @autoreleasepool
+        {
+            [guiView tick];     // 走一遍「记日志 + 画谱面播放头」
+            [guiView tick];
+        }
+        if (!drawOffscreen (wave)) { std::printf ("[复现] ✗ 宿主时间轴下渲染失败\n"); rc = 12; }
+        else step ("绘制网格（含谱面播放头）");
+
+        // ---- 负偏移 + 12/8 拍号（验证分母参与每拍时长计算）----
+        backend.setOffsetSec (-2.0f);
+        backend.setGridBeatsPerBar (12);
+        backend.setGridBeatDenominator (8);
+        if (!drawOffscreen (wave)) { std::printf ("[复现] ✗ 负偏移渲染失败\n"); rc = 13; }
+        else step ("绘制网格（偏移 -2 秒 / 12/8 拍号）");
+
+        // ---- 缩放 / 平移 ----
+        SEL selZoomBy = NSSelectorFromString (@"zoomBy:aroundX:");
+        SEL selFit    = NSSelectorFromString (@"fitAll");
+        if ([wave respondsToSelector:selZoomBy])
+        {
+            ((void (*) (id, SEL, double, CGFloat)) objc_msgSend) (wave, selZoomBy, 8.0, (CGFloat) 100.0);
+            if (!drawOffscreen (wave)) { std::printf ("[复现] ✗ 放大后渲染失败\n"); rc = 14; }
+            else step ("放大 8 倍后绘制（峰值按可见区间重新取样）");
+
+            ((void (*) (id, SEL, double, CGFloat)) objc_msgSend) (wave, selZoomBy, 0.001, (CGFloat) 5.0);
+            if (!drawOffscreen (wave)) { std::printf ("[复现] ✗ 极限缩小后渲染失败\n"); rc = 15; }
+            else step ("极限缩小后绘制（视野钳制生效）");
+        }
+        else
+        {
+            std::printf ("[复现] ✗ 波形视图缺少 zoomBy:aroundX:\n");
+            rc = 16;
+        }
+        if ([wave respondsToSelector:selFit])
+            ((void (*) (id, SEL)) objc_msgSend) (wave, selFit);
+
+        // ---- 无修饰键拖动 = 平移视图，且【绝不能】seek 播放位置 ----
+        // 回归防线：旧版这里是「拖动 = 定位音频播放头」，会把音频拽离谱面，
+        // 用户还得再点一次「回到谱面」才能恢复 —— 已改成纯视野平移。
+        @autoreleasepool
+        {
+            backend.setOffsetSec (0.0f);
+            // 先放大：全览下 viewStart 恒为 0，拖动无从体现。
+            // 锚点取最左边，保证缩放后 viewStart 仍是 0，起点可预期。
+            ((void (*) (id, SEL, double, CGFloat)) objc_msgSend)
+                (wave, NSSelectorFromString (@"zoomBy:aroundX:"), 8.0, (CGFloat) 0.0);
+
+            SEL selViewStart = NSSelectorFromString (@"viewStartSec");
+            const double startBefore = ((double (*) (id, SEL)) objc_msgSend) (wave, selViewStart);
+            const int    seeksBefore = backend.seekCalls;
+
+            const NSInteger wn = g_hostWindow.windowNumber;
+            NSEvent* down = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                               location:NSMakePoint (300, 60)
+                                          modifierFlags:0 timestamp:0 windowNumber:wn
+                                                context:nil eventNumber:1 clickCount:1 pressure:1.0];
+            NSEvent* drag = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDragged
+                                               location:NSMakePoint (180, 60)
+                                          modifierFlags:0 timestamp:0.01 windowNumber:wn
+                                                context:nil eventNumber:2 clickCount:1 pressure:1.0];
+            NSEvent* up = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                             location:NSMakePoint (180, 60)
+                                        modifierFlags:0 timestamp:0.02 windowNumber:wn
+                                              context:nil eventNumber:3 clickCount:1 pressure:1.0];
+            step ("无修饰键按下 → 左拖 120px → 松开（应平移视野、不 seek）");
+            [wave mouseDown:down];
+            [wave mouseDragged:drag];
+            [wave mouseUp:up];
+
+            const double startAfter = ((double (*) (id, SEL)) objc_msgSend) (wave, selViewStart);
+            std::printf ("  · 视野起点 %.4f → %.4f 秒；seekTo 调用 %d → %d\n",
+                         startBefore, startAfter, seeksBefore, backend.seekCalls);
+
+            if (backend.seekCalls != seeksBefore)
+            {
+                std::printf ("[复现] ✗ 拖动波形竟然 seek 了播放位置（应只改视野）\n");
+                rc = 18;
+            }
+            else if (!(startAfter > startBefore))
+            {
+                std::printf ("[复现] ✗ 无修饰键拖动没有平移视野\n");
+                rc = 19;
+            }
+
+            // 恢复全览：紧接着的「⌥ 拖动网格」测试按 60px 位移断言偏移变化量，
+            // 视野缩放级别一变那个量就不成立（实测被压到 0.098 秒 < 0.2 秒）。
+            if ([wave respondsToSelector:selFit])
+                ((void (*) (id, SEL)) objc_msgSend) (wave, selFit);
+        }
+
+        // ---- 「点完『回到播放头』仍错位」→ 提示升级为「建议重启插件」 ----
+        // 这条是「跟随失效」的探针：只有「刚点过按钮 **且** 仍然错位」才升级提示。
+        // 三个反例都要挡住，否则用户会被误报折腾：
+        //   ① 没点过按钮就报 ② 点了没反应却不报 ③ 错位消失后不复位（永久卡在重启提示）
+        // ⚠️ 必须放在下面「回到播放头」用例**之前** —— 「没点过按钮」这个状态
+        //    只在任何一次 noteBackToPlayhead 之前成立（lastBackAt 初值极小）。
+        @autoreleasepool
+        {
+            backend.fakeTimeline = true;     // 谱面播放头 = 3.5 秒，playing = true
+            backend.setOffsetSec (1.5f);     // 目标音频位置 = 3.5 + 1.5 = 5.0 秒
+
+            SEL selCheck   = NSSelectorFromString (@"checkFollow");
+            SEL selNote    = NSSelectorFromString (@"noteBackToPlayhead");
+            SEL selFailNow = NSSelectorFromString (@"followFailActive");
+
+            // ① 错位（6.5 vs 5.0）但**没点过**按钮 → 不该升级
+            backend.seekTo (6.5);
+            ((void (*) (id, SEL)) objc_msgSend) (wave, selCheck);
+            const BOOL failNoClick = ((BOOL (*) (id, SEL)) objc_msgSend) (wave, selFailNow);
+
+            // ② 点一下按钮（记时刻 + 清状态），再让音频偏回去 = 模拟「点了也没用」
+            ((void (*) (id, SEL)) objc_msgSend) (wave, selNote);
+            backend.seekTo (6.5);
+            ((void (*) (id, SEL)) objc_msgSend) (wave, selCheck);
+            const BOOL failAfterClick = ((BOOL (*) (id, SEL)) objc_msgSend) (wave, selFailNow);
+
+            // ③ 错位消失（回到 5.0）→ 必须自动复位
+            backend.seekTo (5.0);
+            ((void (*) (id, SEL)) objc_msgSend) (wave, selCheck);
+            const BOOL failAfterRealign = ((BOOL (*) (id, SEL)) objc_msgSend) (wave, selFailNow);
+
+            std::printf ("  · 没点按钮=%s；点了仍错位=%s；错位消失后=%s（期望 NO / YES / NO）\n",
+                         failNoClick ? "YES" : "NO",
+                         failAfterClick ? "YES" : "NO",
+                         failAfterRealign ? "YES" : "NO");
+
+            if (failNoClick)
+            {
+                std::printf ("[复现] ✗ 没点过「回到播放头」就升级提示（误报）\n");
+                rc = 23;
+            }
+            else if (!failAfterClick)
+            {
+                std::printf ("[复现] ✗ 点过「回到播放头」仍错位，却没升级提示\n");
+                rc = 24;
+            }
+            else if (failAfterRealign)
+            {
+                std::printf ("[复现] ✗ 错位消失后没有复位 —— 徽标会永久卡在「建议重启插件」\n");
+                rc = 25;
+            }
+
+            // 复位，避免影响后续用例
+            backend.setOffsetSec (0.0f);
+        }
+
+        // ---- 「回到播放头」：seek 必须带上偏移，且视野要跟过去 ----
+        // 回归防线：Windows / Linux 端曾经写成 seekTo(playheadSec)，漏掉起始偏移 ——
+        // 点一次反而把两条播放头按偏移量错开，和这个按钮「修复分家」的职责完全相反。
+        // 这里同时锁住两件事：① 位置算对（原文里带偏移）；② 视野真的被带回播放位置。
+        @autoreleasepool
+        {
+            backend.fakeTimeline = true;     // 让宿主提供谱面播放头
+            backend.setOffsetSec (1.5f);     // 故意给个非零偏移，才能验出「漏加偏移」
+
+            SEL selViewStart = NSSelectorFromString (@"viewStartSec");
+            SEL selFit       = NSSelectorFromString (@"fitAll");
+
+            ((void (*) (id, SEL)) objc_msgSend) (wave, selFit);
+            // 放大到 8 倍：全览时整段都在画面里，视野无需移动，测不出「跳回去」。
+            ((void (*) (id, SEL, double, CGFloat)) objc_msgSend)
+                (wave, NSSelectorFromString (@"zoomBy:aroundX:"), 8.0, (CGFloat) 0.0);
+
+            const double startBefore = ((double (*) (id, SEL)) objc_msgSend) (wave, selViewStart);
+            const int    seeksBefore = backend.seekCalls;
+
+            step ("点「回到播放头」（应 seek 到 谱面位置+偏移，并把视野跳过去）");
+            ((void (*) (id, SEL, id)) objc_msgSend)
+                (guiView, NSSelectorFromString (@"backToPlayhead:"), nil);
+
+            const double startAfter = ((double (*) (id, SEL)) objc_msgSend) (wave, selViewStart);
+            const double posAfter   = backend.positionSec ();
+            const double want       = backend.hostTimeline ().playheadSec + backend.offsetSec ();
+
+            std::printf ("  · seekTo 调用 %d → %d；音频位置 %.4f 秒（期望 %.4f）；"
+                         "视野起点 %.4f → %.4f\n",
+                         seeksBefore, backend.seekCalls, posAfter, want,
+                         startBefore, startAfter);
+
+            if (backend.seekCalls <= seeksBefore)
+            {
+                std::printf ("[复现] ✗ 「回到播放头」没有重新对齐（根本没调用 seekTo）\n");
+                rc = 20;
+            }
+            else if (std::fabs (posAfter - want) > 0.01)
+            {
+                std::printf ("[复现] ✗ 「回到播放头」seek 目标漏了起始偏移\n");
+                rc = 21;
+            }
+            else if (std::fabs (startAfter - startBefore) < 1e-6)
+            {
+                std::printf ("[复现] ✗ 「回到播放头」没有把视野带回播放位置\n");
+                rc = 22;
+            }
+
+            // 复位，避免影响后续「⌥ 拖动网格」的前置条件
+            backend.setOffsetSec (0.0f);
+            if ([wave respondsToSelector:selFit])
+                ((void (*) (id, SEL)) objc_msgSend) (wave, selFit);
+        }
+
+        // ---- ⌥ 拖动网格 = 调整起始偏移 ----
+        backend.setOffsetSec (0.0f);
+        @autoreleasepool
+        {
+            const NSInteger wn = g_hostWindow.windowNumber;
+            // 位置是「窗口坐标」，视图内部会用 convertPoint 转到自己的坐标系
+            NSEvent* down = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                               location:NSMakePoint (200, 60)
+                                          modifierFlags:NSEventModifierFlagOption
+                                              timestamp:0 windowNumber:wn context:nil
+                                            eventNumber:1 clickCount:1 pressure:1.0];
+            NSEvent* drag = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDragged
+                                               location:NSMakePoint (260, 60)
+                                          modifierFlags:NSEventModifierFlagOption
+                                              timestamp:0.01 windowNumber:wn context:nil
+                                            eventNumber:2 clickCount:1 pressure:1.0];
+            NSEvent* up = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                             location:NSMakePoint (260, 60)
+                                        modifierFlags:NSEventModifierFlagOption
+                                            timestamp:0.02 windowNumber:wn context:nil
+                                          eventNumber:3 clickCount:1 pressure:1.0];
+            step ("⌥ 按下 → 右拖 60px → 松开（拖动网格）");
+            [wave mouseDown:down];
+            [wave mouseDragged:drag];
+            [wave mouseUp:up];
+        }
+        {
+            const float off = backend.offsetSec ();
+            std::printf ("  · 拖动后偏移 = %+.3f 秒\n", off);
+            if (!(off > 0.2f))
+            {
+                std::printf ("[复现] ✗ ⌥拖动网格没有改变起始偏移\n");
+                rc = 17;
+            }
+        }
+
+        // ---- ⭐ 编辑器关掉再打开：手填的 BPM / 拍号 / 视野都必须还在 ----
+        // 用户实测：「把插件界面关掉之后再打开，之前手动输入的 BPM 就没了，回到 120」。
+        // 根因：后端（Processor）比编辑器视图长寿 —— 关掉界面只销毁 PlugView
+        //       （日志里「编辑器 removed」之后紧跟新的「PlugView 构造」，后端指针不变），
+        //       但新视图的控件都是新建的、没有从后端回读 → 显示默认 120；而 BPM
+        //       输入框一失焦就会自动提交，于是把 120 写回后端 = 手填值真的丢了。
+        // 复刻方式：同一个后端再挂一个编辑器（等价于 MuseScore 重新打开界面）。
+        //
+        // ⭐ 视野同理（用户第二次实测的反馈）：「关掉界面再打开，波形就变成全曲
+        //    全览了，而不是之前放大的那一段」。所以「关界面前的视野」也必须能被
+        //    新视图读回来 —— 这里一并断言。
+        @autoreleasepool
+        {
+            backend.setGridBPM (96.0f);             // = 用户在界面上填 96
+            backend.setGridBeatsPerBar (12);
+            backend.setGridBeatDenominator (8);     // 顺手选个非默认拍号，一并验
+
+            // 关掉宿主演进轴：tick 里的自动跟随会在「宿主播放中」把视野挪到播放头，
+            // 那样测的就不是「用户手动摆的视野」了。我们要一个确定值。
+            backend.fakeTimeline = false;
+
+            ((void (*) (id, SEL, double, double)) objc_msgSend)
+                (wave, NSSelectorFromString (@"zoomToSpan:fromStart:"), 2.0, 5.0);
+            [guiView tick];     // 让 tick 把这份视野回存到后端（真实运行时的路径）
+
+            const double saveStart = ((double (*) (id, SEL)) objc_msgSend)
+                (wave, NSSelectorFromString (@"viewStartSec"));
+            const double saveLen = ((double (*) (id, SEL)) objc_msgSend)
+                (wave, NSSelectorFromString (@"viewLenSec"));
+            std::printf ("  · 关界面前视野 起点 %.3f / 跨度 %.3f 秒；"
+                         "后端里存着 %.3f / %.3f 秒\n",
+                         saveStart, saveLen, backend.viewStartSaved, backend.viewSpanSaved);
+
+            NSWindow* w2 = [[NSWindow alloc] initWithContentRect:NSMakeRect (0, 0, 620, 460)
+                                                       styleMask:NSWindowStyleMaskBorderless
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:NO];
+            auto* pv2 = new ap::PlugView (&backend, nullptr);
+            pv2->addRef ();
+            pv2->attached ((__bridge void*) [w2 contentView], Steinberg::kPlatformTypeNSView);
+
+            NSArray* subs2 = [[w2 contentView] subviews];
+            NSView* panel2 = subs2.count > 0 ? [[subs2 objectAtIndex:subs2.count - 1] retain] : nil;
+
+            if (!panel2)
+            {
+                std::printf ("[复现] ✗ 第二个编辑器视图未挂载，无法验证回读\n");
+                rc = 26;
+            }
+            else
+            {
+                const double bpmShown = [panel2 bpmFieldValue];
+                NSString* tsShown = [panel2 beatsSelection];
+                std::printf ("  · 重开编辑器后界面显示：BPM=%g，拍号=%s（期望 96 / 12/8）\n",
+                             bpmShown, tsShown ? [tsShown UTF8String] : "(nil)");
+
+                if (std::fabs (bpmShown - 96.0) > 0.5)
+                {
+                    std::printf ("[复现] ✗ 重开编辑器后 BPM 没有从后端回读（手填值会丢）\n");
+                    rc = 27;
+                }
+                else if (!tsShown || ![tsShown isEqualToString:@"12/8"])
+                {
+                    std::printf ("[复现] ✗ 重开编辑器后拍号没有从后端回读\n");
+                    rc = 28;
+                }
+
+                // ---- ⭐ 视野：重开编辑器必须回到关之前的同一段（含放大倍数）----
+                // 期望值独立写死（2.0 / 5.0），故意不引用源码里的常量。
+                // ⚠️ 别把这条写成「太短就跳过」了事：build.sh 的测试音频是 20 秒，
+                //    必然走断言分支；若日志里出现「跳过」，说明测试音频被改短了。
+                NSView* wave2 = findWaveView (panel2);
+                SEL selLen2   = NSSelectorFromString (@"viewLenSec");
+                SEL selStart2 = NSSelectorFromString (@"viewStartSec");
+                const double durNow = backend.durationSec ();
+                if (!wave2)
+                {
+                    std::printf ("[复现] ✗ 第二个编辑器里找不到波形视图\n");
+                    rc = 35;
+                }
+                else if (durNow < 7.0)
+                {
+                    std::printf ("  · （测试音频只有 %.2f 秒，太短，跳过「视野恢复」断言）\n",
+                                 durNow);
+                }
+                else
+                {
+                    const double len2 = ((double (*) (id, SEL)) objc_msgSend) (wave2, selLen2);
+                    const double st2  = ((double (*) (id, SEL)) objc_msgSend) (wave2, selStart2);
+                    std::printf ("  · 重开编辑器后视野 起点 %.3f / 跨度 %.3f 秒"
+                                 "（期望 5.000 / 2.000）\n", st2, len2);
+
+                    if (std::fabs (len2 - 2.0) > 0.05 || std::fabs (st2 - 5.0) > 0.05)
+                    {
+                        std::printf ("[复现] ✗ 重开编辑器后视野没恢复（退回默认全览/默认跨度）"
+                                     "—— 用户会看到「波形变成全曲全览」\n");
+                        rc = 35;
+                    }
+                    else
+                    {
+                        step ("重开编辑器后视野恢复到关之前的同一段（放大倍数也一致）");
+                    }
+                }
+
+                if ([panel2 respondsToSelector:NSSelectorFromString (@"stopTimer")])
+                    [panel2 stopTimer];
+                [panel2 release];
+            }
+            [w2 release];
+        }
+
+        // ---- ⭐ 播放中把视野拖到别处：画面不许把播放头「拽」回来 ----
+        // 用户实测：「播放中左右调动波形会抽搐，而抽搐的过程中两个播放头就分家了」。
+        // 旧规则在「播放头完全跑出画面」时【无条件】把视野拉回 → 与用户的手来回
+        // 拉锯（抽搐），每次拉回还要重取样，音频线程被饿到丢块（真分家）。
+        // 新规则：手动操作时播放头允许待在画面外；即使跟随超时自动恢复，也只在
+        // 播放头【还在画面附近】时才顺滑滚动，绝不会突然跳回去抢走用户看的位置。
+        @autoreleasepool
+        {
+            backend.fakeTimeline = true;       // 谱面播放头存在，且 playing = true
+            backend.fakePlayheadSec = 3.5;
+            backend.setOffsetSec (0.0f);
+            backend.setGridBPM (0.0f);
+
+            SEL selFit   = NSSelectorFromString (@"fitAll");
+            SEL selZoom  = NSSelectorFromString (@"zoomBy:aroundX:");
+            SEL selStart = NSSelectorFromString (@"viewStartSec");
+
+            ((void (*) (id, SEL)) objc_msgSend) (wave, selFit);
+            // 放到 40 倍（视野约 0.2 秒）：播放头 3.5 秒必然远在画面之外
+            ((void (*) (id, SEL, double, CGFloat)) objc_msgSend) (wave, selZoom, 40.0, (CGFloat) 0.0);
+
+            const NSInteger wn = g_hostWindow.windowNumber;
+            NSEvent* down = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                               location:NSMakePoint (100, 60)
+                                          modifierFlags:0 timestamp:0 windowNumber:wn
+                                                context:nil eventNumber:1 clickCount:1 pressure:1.0];
+            NSEvent* dragg = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDragged
+                                                location:NSMakePoint (600, 60)
+                                           modifierFlags:0 timestamp:0.01 windowNumber:wn
+                                                 context:nil eventNumber:2 clickCount:1 pressure:1.0];
+            NSEvent* up = [NSEvent mouseEventWithType:NSEventTypeLeftMouseUp
+                                             location:NSMakePoint (600, 60)
+                                        modifierFlags:0 timestamp:0.02 windowNumber:wn
+                                              context:nil eventNumber:3 clickCount:1 pressure:1.0];
+            step ("播放中无修饰键拖动视野（拖到远离播放头的位置）");
+            [wave mouseDown:down];
+            [wave mouseDragged:dragg];
+            [wave mouseUp:up];
+
+            const double startPanned = ((double (*) (id, SEL)) objc_msgSend) (wave, selStart);
+            // 连跑 10 次 tick = 播放中过了 0.5 秒。
+            // ⚠️ fakeTimeline 的鼠标事件时间戳是 0，而系统已运行很久 →
+            //    recoverAutoFollow 会立刻判定「用户早就停手了」并恢复跟随。
+            //    这正是我们想覆盖的更严苛路径：跟随已恢复也不许把视野拽回去。
+            for (int i = 0; i < 10; ++i)
+                [guiView tick];
+            const double startAfter = ((double (*) (id, SEL)) objc_msgSend) (wave, selStart);
+
+            std::printf ("  · 拖动后视野起点 %.3f 秒；连跑 10 次 tick 后 %.3f 秒（应不变）\n",
+                         startPanned, startAfter);
+
+            if (std::fabs (startAfter - startPanned) > 0.01)
+            {
+                std::printf ("[复现] ✗ 播放中被自动跟随拉回了视野 —— 用户看到的就是抽搐\n");
+                rc = 29;
+            }
+
+            // ---- 反向用例：宿主【自己】把播放头挪走（点小节 / 循环回卷）→ 画面该跟 ----
+            // 只有这种情况才允许画面跳转，否则用户会「找不到播放头」。
+            backend.fakePlayheadSec = 6.5;      // 距上一帧 3.0 秒 > kHostJumpSec(0.25)
+            for (int i = 0; i < 2; ++i)
+                [guiView tick];
+            const double startAfterJump = ((double (*) (id, SEL)) objc_msgSend) (wave, selStart);
+            std::printf ("  · 宿主把播放头挪到 6.5 秒后，视野起点 = %.3f 秒（应跟到 6.3 附近）\n",
+                         startAfterJump);
+
+            if (backend.durationSec () < 7.0)
+            {
+                std::printf ("  · （测试音频太短，跳过「跟随宿主跳转」断言）\n");
+            }
+            else if (startAfterJump < 5.5)
+            {
+                std::printf ("[复现] ✗ 宿主主动跳转播放头后，画面没有跟过去\n");
+                rc = 30;
+            }
+
+            // ---- ⭐ 宿主【暂停】时换小节：画面同样要跟过去 ----
+            // 用户实测原话：「在宿主内换小节、换播放位置的时候，波形位置直接跳转到
+            // 对应的位置。这样乐谱是空白的，也可以直接定位到音乐的位置，扒谱方便。」
+            // 旧版跟随被 tl.playing 门控 —— 暂停时点小节画面纹丝不动，而扒谱恰恰
+            // 就是暂停着一个小节一个小节点的。这里把宿主设成暂停，再跳一次。
+            if (backend.durationSec () >= 7.0)
+            {
+                backend.fakePlaying = false;        // 宿主已暂停
+                backend.fakePlayheadSec = 7.0;      // 再挪一段（距 6.5 差 0.5 > kHostJumpSec）
+                const double beforePaused = ((double (*) (id, SEL)) objc_msgSend) (wave, selStart);
+                for (int i = 0; i < 2; ++i)
+                    [guiView tick];
+                const double afterPaused = ((double (*) (id, SEL)) objc_msgSend) (wave, selStart);
+
+                std::printf ("  · 暂停中宿主把播放头挪到 7.0 秒：视野 %.3f → %.3f 秒\n",
+                             beforePaused, afterPaused);
+
+                if (std::fabs (afterPaused - beforePaused) < 0.05)
+                {
+                    std::printf ("[复现] ✗ 暂停时宿主换位置，画面没有跟过去"
+                                 "（暂停下点小节定位不到音乐）\n");
+                    rc = 33;
+                }
+                else
+                {
+                    step ("暂停状态下宿主换位置，画面跟了过去");
+                }
+                backend.fakePlaying = true;         // 复原，别影响后面的用例
+            }
+        }
+
+        // ---- 拍号条：谱子里有拍号变化时，网格按【逐小节】的拍号推进 ----
+        // 用户需求原话：「扒谱时遇到拍号变化，后续小节也能正常标记在音频上」。
+        // 关键断言不是「有条」，而是【变化点之后每小节长度真的变了】—— 若退回
+        // 「全曲统一 barSec」，第 3 小节转 3/4 之后所有小节线都会错位。
+        //
+        // 断言用「方块间距之比」，与像素尺度无关：
+        //   第 2→3 小节相隔 2.0 秒（4/4），第 3→4 小节相隔 1.5 秒（3/4）→ 比值 0.75。
+        @autoreleasepool
+        {
+            SEL selCount  = NSSelectorFromString (@"timeSigBoxCount");
+            SEL selBarAt  = NSSelectorFromString (@"timeSigBoxBarAtIndex:");
+            SEL selBeats  = NSSelectorFromString (@"timeSigBoxBeatsAtIndex:");
+            SEL selDenom  = NSSelectorFromString (@"timeSigBoxDenomAtIndex:");
+            SEL selChgd   = NSSelectorFromString (@"timeSigBoxChangedAtIndex:");
+            SEL selMidX   = NSSelectorFromString (@"timeSigBoxMidXAtIndex:");
+            SEL selVisible = NSSelectorFromString (@"tsPopupVisible");
+            SEL selBtnPt  = NSSelectorFromString (@"tsButtonMidPointForKind:value:");
+            SEL selZoomTo = NSSelectorFromString (@"zoomToSpan:fromStart:");
+            SEL selFit2   = NSSelectorFromString (@"fitAll");
+
+            backend.fakeTimeline = false;      // 网格跟手填的参数走，别被假宿主覆盖
+            backend.setGridBPM (0.0f);         // 自动 → 默认 120
+            backend.setGridBeatsPerBar (4);
+            backend.setGridBeatDenominator (4);
+            backend.setOffsetSec (0.0f);
+            backend.m_tsChanges.clear ();
+
+            // 固定视野：0 秒起、8 秒长。4/4 @120BPM 每小节 2 秒 → 第 1..4 小节 + 第 5 小节起点都在画面里
+            ((void (*) (id, SEL, double, double)) objc_msgSend) (wave, selZoomTo, 8.0, 0.0);
+
+            const int nBase = (int) ((int (*) (id, SEL)) objc_msgSend) (wave, selCount);
+            std::printf ("  · 无变化时拍号条方块数 = %d（8 秒视野 / 每小节 2 秒）\n", nBase);
+            if (nBase < 3)
+            {
+                std::printf ("[复现] ✗ 拍号条没有按小节摆出方块\n");
+                rc = 37;
+            }
+            else
+            {
+                step ("拍号条按小节摆出方块（无变化）");
+            }
+
+            backend.setTimeSigChange (3, 3, 4);    // 第 3 小节起转 3/4
+
+            auto midXOfBar = [&] (int bar) -> CGFloat
+            {
+                const int n = (int) ((int (*) (id, SEL)) objc_msgSend) (wave, selCount);
+                for (int i = 0; i < n; ++i)
+                {
+                    const int b = (int) ((int (*) (id, SEL, int)) objc_msgSend) (wave, selBarAt, i);
+                    if (b == bar)
+                        return ((CGFloat (*) (id, SEL, int)) objc_msgSend) (wave, selMidX, i);
+                }
+                return -1.0;
+            };
+
+            const CGFloat x2 = midXOfBar (2);
+            const CGFloat x3 = midXOfBar (3);
+            const CGFloat x4 = midXOfBar (4);
+            std::printf ("  · 方块中心 x：第 2 小节 %.1f，第 3 小节 %.1f，第 4 小节 %.1f\n",
+                         (double) x2, (double) x3, (double) x4);
+
+            // 第 3 小节那块应当是 3/4 且带「变化点」标记；第 4 小节沿用 3/4 但不是变化点
+            {
+                const int n = (int) ((int (*) (id, SEL)) objc_msgSend) (wave, selCount);
+                bool ok3 = false, ok4 = false, okFlag = false;
+                for (int i = 0; i < n; ++i)
+                {
+                    const int b     = (int) ((int (*) (id, SEL, int)) objc_msgSend) (wave, selBarAt, i);
+                    const int be    = (int) ((int (*) (id, SEL, int)) objc_msgSend) (wave, selBeats, i);
+                    const int de    = (int) ((int (*) (id, SEL, int)) objc_msgSend) (wave, selDenom, i);
+                    const BOOL ch   = (BOOL) ((BOOL (*) (id, SEL, int)) objc_msgSend) (wave, selChgd, i);
+                    if (b == 3) { ok3 = (be == 3 && de == 4); okFlag = ch; }
+                    if (b == 4) { ok4 = (be == 3 && de == 4); }
+                }
+                if (!ok3 || !okFlag)
+                {
+                    std::printf ("[复现] ✗ 第 3 小节的方块没有标成 3/4 变化点\n");
+                    rc = 38;
+                }
+                else if (!ok4)
+                {
+                    std::printf ("[复现] ✗ 变化点之后的小节没有沿用 3/4\n");
+                    rc = 38;
+                }
+                else
+                {
+                    step ("变化点方块 = 3/4 且被标出；后面小节沿用 3/4");
+                }
+            }
+
+            if (x2 > 0 && x3 > 0 && x4 > 0)
+            {
+                const double d23 = (double) (x3 - x2);   // 2.0 秒
+                const double d34 = (double) (x4 - x3);   // 1.5 秒
+                const double ratio = d23 > 0.0 ? d34 / d23 : 0.0;
+                std::printf ("  · 间距之比 第3→4 / 第2→3 = %.3f（期望 0.750；"
+                             "若退化成统一小节长会是 1.000）\n", ratio);
+                if (std::fabs (ratio - 0.75) > 0.08)
+                {
+                    std::printf ("[复现] ✗ 拍号变化点之后的小节长度没有跟着变"
+                                 "（网格从变化点起会全部错位）\n");
+                    rc = 39;
+                }
+                else
+                {
+                    step ("变化点之后每小节长度按新的拍号算（3/4 → 1.5 秒）");
+                }
+            }
+            else
+            {
+                std::printf ("[复现] ✗ 找不到第 2/3/4 小节的拍号方块，无法验证间距\n");
+                rc = 39;
+            }
+
+            // ---- 点方块 → 弹出该小节的拍号设置 ----
+            NSView* popup = findViewByClass (guiView, @"TimeSigPopupView");
+            if (popup && x3 > 0 && [wave respondsToSelector:selCount])
+            {
+                const NSInteger wn = g_hostWindow.windowNumber;
+                // 条在波形视图顶部 0..22px（视图是 flipped，y 向下）→ 取 y = 8
+                const NSPoint pWin = [wave convertPoint:NSMakePoint (x3, 8.0) toView:nil];
+                NSEvent* d = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                location:pWin modifierFlags:0 timestamp:0
+                                            windowNumber:wn context:nil eventNumber:1
+                                              clickCount:1 pressure:1.0];
+                [wave mouseDown:d];
+
+                const BOOL vis = (BOOL) ((BOOL (*) (id, SEL)) objc_msgSend) (guiView, selVisible);
+                if (!vis)
+                {
+                    std::printf ("[复现] ✗ 点拍号条上的方块没有弹出拍号设置\n");
+                    rc = 40;
+                }
+                else
+                {
+                    step ("点第 3 小节的方块 → 弹出该小节的拍号设置");
+
+                    // 分子选 6 → 后端第 3 小节应变成 6/4
+                    NSPoint bp = ((NSPoint (*) (id, SEL, int, int)) objc_msgSend)
+                        (popup, selBtnPt, 0, 6);
+                    const NSPoint bpWin = [popup convertPoint:bp toView:nil];
+                    NSEvent* bd = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                     location:bpWin modifierFlags:0 timestamp:0.01
+                                                 windowNumber:wn context:nil eventNumber:2
+                                                   clickCount:1 pressure:1.0];
+                    [popup mouseDown:bd];
+
+                    const auto& ts = backend.m_tsChanges;
+                    if (ts.size () != 1 || ts.count (3) == 0
+                        || ts.at (3).beats != 6 || ts.at (3).denom != 4)
+                    {
+                        std::printf ("[复现] ✗ 弹层里选「分子 6」没有写进后端"
+                                     "（第 3 小节应为 6/4）\n");
+                        rc = 41;
+                    }
+                    else
+                    {
+                        step ("弹层里选「分子 6」→ 第 3 小节变成 6/4");
+                    }
+
+                    // 再把分子选回 4（= 继承值）→ 等于「这一小节没有变化」，应取消变化点
+                    bp  = ((NSPoint (*) (id, SEL, int, int)) objc_msgSend) (popup, selBtnPt, 0, 4);
+                    const NSPoint bp2Win = [popup convertPoint:bp toView:nil];
+                    NSEvent* bd2 = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                      location:bp2Win modifierFlags:0 timestamp:0.02
+                                                  windowNumber:wn context:nil eventNumber:3
+                                                    clickCount:1 pressure:1.0];
+                    [popup mouseDown:bd2];
+
+                    bool flagOff = false;
+                    {
+                        const int n = (int) ((int (*) (id, SEL)) objc_msgSend) (wave, selCount);
+                        for (int i = 0; i < n; ++i)
+                            if ((int) ((int (*) (id, SEL, int)) objc_msgSend) (wave, selBarAt, i) == 3)
+                                flagOff = !(BOOL) ((BOOL (*) (id, SEL, int)) objc_msgSend) (wave, selChgd, i);
+                    }
+                    if (!backend.m_tsChanges.empty () || !flagOff)
+                    {
+                        std::printf ("[复现] ✗ 把拍号选回继承值没有取消变化点"
+                                     "（会留下一个橙块却毫无几何作用）\n");
+                        rc = 42;
+                    }
+                    else
+                    {
+                        step ("把拍号选回继承值 → 变化点被取消");
+                    }
+
+                    // 点面板空白处 → 关闭弹层
+                    const NSPoint blank = [popup convertPoint:NSMakePoint (4.0, 4.0) toView:nil];
+                    NSEvent* cd = [NSEvent mouseEventWithType:NSEventTypeLeftMouseDown
+                                                     location:blank modifierFlags:0 timestamp:0.03
+                                                 windowNumber:wn context:nil eventNumber:4
+                                                   clickCount:1 pressure:1.0];
+                    [popup mouseDown:cd];
+                    if ((BOOL) ((BOOL (*) (id, SEL)) objc_msgSend) (guiView, selVisible))
+                    {
+                        std::printf ("[复现] ✗ 点弹层外面没有关掉它\n");
+                        rc = 43;
+                    }
+                    else
+                    {
+                        step ("点弹层外 → 关闭");
+                    }
+                }
+            }
+            else
+            {
+                std::printf ("[复现] ✗ 找不到拍号弹层视图，无法验证点击链\n");
+                rc = 40;
+            }
+
+            // 复原：别让拍号变化 / 网格参数影响后续用例
+            backend.m_tsChanges.clear ();
+            backend.setGridBeatsPerBar (4);
+            backend.setGridBeatDenominator (4);
+            backend.setGridBPM (0.0f);
+            if ([wave respondsToSelector:selFit2])
+                ((void (*) (id, SEL)) objc_msgSend) (wave, selFit2);
+        }
+
+        // ---- 关窗口不能残留拖动状态 ----
+        @autoreleasepool
+        {
+        SEL selStopDrag = NSSelectorFromString (@"stopDrag");
+        if ([guiView respondsToSelector:selStopDrag])
+            ((void (*) (id, SEL)) objc_msgSend) (guiView, selStopDrag);
+        step ("清理拖动状态");
+        }
+        step ("清理拖动状态");
+    }
+    else
+    {
+        std::printf ("[复现] 未知模式: %s\n", mode);
+        return 2;
+    }
+
+    // ---- 收尾：摘掉视图，确认关闭路径也不崩 ----
+    @autoreleasepool
+    {
+        step ("关闭编辑器（stopTimer + removeFromSuperview）");
+        SEL s = NSSelectorFromString (@"stopTimer");
+        if ([guiView respondsToSelector:s])
+            ((void (*) (id, SEL)) objc_msgSend) (guiView, s);
+        [guiView removeFromSuperview];
+    }
+
+    [guiView release];
+    if (rc == 0)
+        std::printf ("[复现] 全部步骤正常完成 ✓\n");
+    else
+        std::printf ("[复现] ✗ 存在失败项（退出码 %d）\n", rc);
+    return rc;
+}

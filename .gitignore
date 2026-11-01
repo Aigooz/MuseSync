@@ -1,0 +1,28 @@
+#==============================================================================
+# .gitignore — 排除构建产物、SDK、打包中间件
+#==============================================================================
+
+# 构建输出
+build/
+build-*/
+dist/
+pkg/.work/
+
+# VST3 SDK（CI 里自动拉取，不入库）
+vst3sdk/
+
+# 系统垃圾
+.DS_Store
+*.o
+*.dSYM/
+*.log
+*.jsc
+companion/**/*.ini
+# Local desktop captures are not release assets.
+docs/*.png
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user

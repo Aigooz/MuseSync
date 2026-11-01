@@ -1,0 +1,58 @@
+#Requires -Version 7.0
+[CmdletBinding()]
+param([string] $ReleaseDirectory = 'dist/releases/2.1.0')
+$ErrorActionPreference = 'Stop'
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$release = if ([IO.Path]::IsPathRooted($ReleaseDirectory)) { $ReleaseDirectory } else { Join-Path $root $ReleaseDirectory }
+$version = [regex]::Match((Get-Content -LiteralPath (Join-Path $root 'CMakeLists.txt') -Raw), 'project\(MuseTone VERSION ([0-9]+\.[0-9]+\.[0-9]+)').Groups[1].Value
+$checksums = Get-Content -LiteralPath (Join-Path $release 'SHA256SUMS.txt')
+if ($checksums.Count -ne 3) { throw 'Expected hashes for EXE, portable ZIP and source ZIP' }
+foreach ($line in $checksums) {
+    if ($line -notmatch '^([0-9a-f]{64})  ([^/\\]+)$') { throw "Invalid checksum line: $line" }
+    $expected, $file = $Matches[1], $Matches[2]
+    if ((Get-FileHash -LiteralPath (Join-Path $release $file)).Hash.ToLowerInvariant() -ne $expected) {
+        throw "Checksum mismatch: $file"
+    }
+}
+$exe = Get-Item -LiteralPath (Join-Path $release "MuseTone-Setup-$version-Windows-x64.exe")
+if ($exe.VersionInfo.ProductVersion.Trim() -ne $version) { throw 'Installer version metadata mismatch' }
+$archives = @{
+    "MuseTone-$version-Source.zip" = @(
+        'CMakeLists.txt', 'source/win/gui_win.cpp', 'companion/MuseToneSync/MuseToneSync.qml',
+        'installer/windows/release.ini', 'vst3sdk/LICENSE.txt', 'vst3sdk/pluginterfaces/LICENSE.txt',
+        'vst3sdk/public.sdk/LICENSE.txt', 'vst3sdk/base/LICENSE.txt',
+        'vst3sdk/vstgui4/vstgui/thirdparty/miniz/miniz.c', 'vst3sdk/cmake/modules/SMTG_PlatformToolset.cmake'
+    )
+    "MuseTone-$version-Windows-x64.zip" = @(
+        "MuseTone-$version-Windows-x64/MuseTone.vst3/Contents/x86_64-win/MuseTone.vst3",
+        "MuseTone-$version-Windows-x64/MuseToneSync/MuseToneSync.qml",
+        "MuseTone-$version-Windows-x64/licenses/signalsmith-stretch.txt",
+        "MuseTone-$version-Windows-x64/INSTALL.txt"
+    )
+}
+foreach ($item in $archives.GetEnumerator()) {
+    $zip = [IO.Compression.ZipFile]::OpenRead((Join-Path $release $item.Key))
+    try {
+        $names = @($zip.Entries.FullName | ForEach-Object { $_.Replace('\', '/') })
+        foreach ($required in $item.Value) {
+            if ($names -notcontains $required) { throw "Missing $required in $($item.Key)" }
+        }
+        $unwanted = $names | Where-Object {
+            $_ -match '(^|/)\.git(/|$)|(^|/)__pycache__/|\.jsc$|MuseTone(Sync|Commands)\.ini$|^docs/.*\.png$|^build[^/]*/|^dist/'
+        }
+        if ($unwanted) { throw "Unwanted archive entries: $($unwanted -join ', ')" }
+        if ($item.Key.EndsWith('Source.zip')) {
+            foreach ($file in @('CMakeLists.txt', 'source/aplaysdk.cpp', 'source/win/gui_win.cpp',
+                    'companion/MuseToneSync/MuseToneSync.qml', '.github/workflows/build-windows.yml')) {
+                $entry = $zip.GetEntry($file)
+                $stream = $entry.Open()
+                try { $archivedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)) }
+                finally { $stream.Dispose() }
+                if ($archivedHash -ne (Get-FileHash -LiteralPath (Join-Path $root $file)).Hash) {
+                    throw "Stale source archive entry: $file"
+                }
+            }
+        }
+    } finally { $zip.Dispose() }
+}
+Write-Output "PASS: $version installer metadata, all release checksums, source payload hashes, SDK/license completeness and archive hygiene"

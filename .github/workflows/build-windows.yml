@@ -1,0 +1,97 @@
+name: Build MuseTone Windows
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout pinned VST3 SDK
+        uses: actions/checkout@v4
+        with:
+          repository: steinbergmedia/vst3sdk
+          ref: 3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96
+          path: vst3sdk
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DMUSETONE_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+      - name: Regression tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: VST3 validator
+        shell: pwsh
+        run: |
+          & ./build/bin/Release/validator.exe ./build/VST3/Release/MuseTone.vst3
+          if ($LASTEXITCODE -ne 0) { throw 'VST3 validation failed' }
+      - name: QML bridge tests
+        shell: pwsh
+        run: |
+          python -m pip install PyQt5==5.15.11
+          if ($LASTEXITCODE -ne 0) { throw 'PyQt5 installation failed' }
+          python tests/qml_bridge_test.py
+          if ($LASTEXITCODE -ne 0) { throw 'QML bridge validation failed' }
+      - name: Install packaging compiler
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe")) {
+            choco install innosetup -y --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+          }
+      - name: Package release
+        shell: pwsh
+        run: ./tools/package-windows.ps1 -BuildDirectory build
+      - name: Verify release archives
+        shell: pwsh
+        run: ./tests/release_package_test.ps1
+      - name: Isolated installer smoke test
+        shell: pwsh
+        run: ./tests/installer_smoke_test.ps1 -BuildDirectory build -IsccPath "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MuseTone-Windows-x64-release
+          path: |
+            dist/releases/*/*.exe
+            dist/releases/*/*.zip
+            dist/releases/*/SHA256SUMS.txt
+            dist/releases/*/RELEASE-NOTES.md
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: MuseTone-Windows-x64-release
+          path: release-files
+      - name: Publish versioned release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          test -f "release-files/MuseTone-Setup-${VERSION}-Windows-x64.exe"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; preserving published assets."
+          else
+            gh release create "$TAG" release-files/*.exe release-files/*.zip release-files/SHA256SUMS.txt --verify-tag --title "MuseTone $VERSION" --notes-file release-files/RELEASE-NOTES.md
+          fi

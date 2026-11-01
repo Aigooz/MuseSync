@@ -1,0 +1,49 @@
+MuseTone 2.1.0 / Windows x64
+
+This EXE installs a MuseScore VST3 plugin, not a standalone audio player.
+Windows 10/11 x64 and MuseScore 4 are required (target environment: 4.7).
+Automated tests do not replace testing inside your MuseScore installation.
+Save your score and close MuseScore before installing or upgrading.
+
+INSTALL
+1. Run MuseTone-Setup-2.1.0-Windows-x64.exe as administrator.
+2. Select the MuseScore installation folder containing bin\MuseScore4.exe.
+   Custom installations, including other drives, are supported.
+3. The installer installs both MuseTone.vst3 and MuseTone Sync.
+   The MuseToneSync folder allows Users to write sync snapshots without
+   running MuseScore as administrator; no other plugin folders are changed.
+4. Restart MuseScore. In Plugin Manager, enable MuseTone Sync.
+5. Run MuseTone Sync from the Plugins menu once per MuseScore session.
+   A popup confirms that the background sync service has started.
+6. In the mixer, add MuseTone as a VST3 instrument on an output channel.
+   Keep that channel unmuted. Open its editor and load your accompaniment.
+
+USE
+- Playback follows MuseScore. Align the audio's first beat with the score
+  using the offset control. Ctrl/Alt drag adjusts alignment.
+- Keep score-follow enabled for tempo and meter changes.
+- The progress bar supports seeking; its right-hand display shows
+  measure-beat, for example 73-3. The floating strip also shows this.
+- Pitch shift preserves duration. Audio is not automatically time-stretched.
+- Repeat expansion and temporary playback-speed multipliers have limitations.
+- The question-mark button opens the built-in Chinese guide.
+
+MANUAL ZIP INSTALL
+Copy the entire MuseTone.vst3 folder to:
+  C:\Program Files\Common Files\VST3
+Copy MuseToneSync to the plugins folder in your MuseScore installation.
+MuseToneSync must be writable by the Windows user running MuseScore.
+Use the EXE installer to configure this permission automatically.
+Then follow steps 4-6 above.
+
+SECURITY AND UNINSTALL
+The installer is not code-signed. Verify its SHA256 against the release's
+SHA256SUMS.txt. Follow your Windows security policy if SmartScreen warns.
+Uninstall MuseTone from Windows Settings > Apps after closing MuseScore.
+Uninstallation does not delete your scores, audio files or other VST3 plugins.
+
+LICENSE
+GPL-3.0. Source code must be available with the matching release.
+Third-party license notices are installed alongside these instructions.
+MuseTone is based on the DaweiDrumScore open-source project.
+Customization credit: @爱鸽咕子
