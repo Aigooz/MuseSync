@@ -1,14 +1,14 @@
 # MuseSync 谱伴同步 for Windows
 
-当前发布版：**2.2.0**，同步组件：**MuseSync Bridge 1.3.0**。
+当前发布版：**2.3.0**，同步组件：**MuseSync Bridge 1.4.0**。
 
-原名 MuseTone。本地更新版的 VST3 文件夹和内部模块已统一为 `MuseSync.vst3`。
+原名 MuseTone。从 2.3.0 起，VST3 文件夹和内部模块已统一为 `MuseSync.vst3`。
 VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保持不变。
 升级会将旧 VST3 副本归档停用，避免重复扫描；不必手动改名。
 
 ## 下载与启用
 
-普通用户下载 `MuseSync-Setup-2.2.0-Windows-x64.exe`，核对同一发布页的
+普通用户下载 `MuseSync-Setup-2.3.0-Windows-x64.exe`，核对同一发布页的
 `SHA256SUMS.txt` 后安装。此 EXE 是安装器，不是独立播放器。
 需要 Windows 10/11 x64 和官方 MuseScore 4 安装版；安装前保存谱面并退出 MuseScore。分发时只需发送 EXE，对方无需源码或 ZIP，但仍需安装宿主并启用插件。
 
@@ -30,13 +30,14 @@ MuseScore 3 不支持 VST3，因此不支持本插件。4.0–4.5 已增加旧�
 安装目录内也有 `一键卸载 MuseSync` 快捷方式。入口会移除 MuseSync Bridge、MuseSync/MuseTone VST3 及验证过身份的旧版停用文件，保留谱面、音频、其他插件和同步 INI 设置。
 它不会强制关闭 MuseScore；文件被占用时会提示关闭软件后重试。卸载完成后可直接重新运行安装 EXE。
 
-本地更新版在打开插件面板后会后台检查正式发布版本；发现新版时，“？”按钮出现提示点。
+2.3.0 起，在打开插件面板后会后台检查正式发布版本；发现新版时，“？”按钮出现提示点。
 打开“？”使用指南，在底部可查看当前版本、点击“检查更新”，以及“下载更新”。
 安装器直接在插件内下载，显示进度并支持取消，下载完成后自动核对 SHA-256。
 通过校验后按钮变为“安装更新”，确认后打开安装器，不跳转浏览器，不自动关闭 MuseScore。
 检查或下载失败可重试；没有后台常驻服务，关闭插件面板会取消尚未完成的任务。
 更新请求只访问 GitHub 发布下载地址，不需要 GitHub 登录，不上传谱面或伴奏。
 下载保存在 `%LOCALAPPDATA%\MuseSync\Updates`；校验失败的临时文件会删除。
+2.2.0 及更早版本没有此更新入口，需要先手动下载 EXE 升级到 2.3.0。
 
 也可以到 [GitHub 发布页](https://github.com/Aigooz/MuseSync/releases/latest)手动下载新版
 `MuseSync-Setup-版本号-Windows-x64.exe` 并核对 `SHA256SUMS.txt`。

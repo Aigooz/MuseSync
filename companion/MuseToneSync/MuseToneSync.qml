@@ -7,7 +7,7 @@ MuseScore {
     id: root
     title: "MuseSync Bridge"
     description: "Live tempo and time-signature bridge for MuseSync."
-    version: "1.3.0"
+    version: "1.4.0"
     requiresScore: false
     property var lastScore: null
     property string scoreSession: ""

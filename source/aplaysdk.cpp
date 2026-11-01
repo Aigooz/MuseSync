@@ -37,7 +37,7 @@ using namespace Steinberg::Vst;
 static constexpr uint32 kAPlayDistributable = 1 << 0;
 
 #ifndef MUSETONE_VERSION
-#define MUSETONE_VERSION "2.2.0"
+#define MUSETONE_VERSION "2.3.0"
 #endif
 #define APLAY_VERSION_WSTR STR16 (MUSETONE_VERSION)
 

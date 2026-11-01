@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.3.0 - 2026-11-02
+
+Windows x64 release, with MuseSync Bridge 1.4.0.
+
+- Add background update checks and a notification dot on the guide button. Download installers inside the plugin, with progress, cancellation and SHA-256 verification before launch.
+- Localize the installer and installation instructions into Simplified Chinese. Reuse previous installation directories for in-place upgrades.
+- Add one-click removal of the Bridge, VST3 and verified disabled legacy bundles, preserving user scores, audio, unrelated plugins and sync INI files.
+- Rename the physical Windows bundle and module to MuseSync.vst3. Preserve class IDs and saved state; disable and archive the old MuseTone bundle during upgrades.
+- Refresh typography, light/dark colors, waveform markers, floating position display and the built-in guide.
+- Add legacy Qt 5 settings, numeric playback-time and multi-track tempo scanning paths for earlier MuseScore 4 APIs.
+
+Compatibility: MuseScore 3 does not support VST3. Earlier MuseScore 4 API paths have regression coverage, not per-version host certification. Updates do not automatically time-stretch accompaniment or close MuseScore. The installer remains unsigned; macOS/Linux binaries are not part of this release.
+
 ## 2.2.0 - 2026-11-01
 
 Rename the Windows plugin to MuseSync (谱伴同步), with MuseSync Bridge 1.3.0.

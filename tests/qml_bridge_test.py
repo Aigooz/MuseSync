@@ -150,7 +150,7 @@ with tempfile.TemporaryDirectory(prefix="MuseTone-QML-") as directory:
     plugin = component.create()
     assert plugin is not None, "\n".join(e.toString() for e in component.errors())
     assert plugin.property("title") == "MuseSync Bridge"
-    assert plugin.property("version") == "1.3.0"
+    assert plugin.property("version") == "1.4.0"
     plugin.run.emit()
     assert plugin.property("bridge") is not None, "settings initialization failed"
     get_profile = ctypes.windll.kernel32.GetPrivateProfileStringW
