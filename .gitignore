@@ -7,6 +7,9 @@ build/
 build-*/
 dist/
 pkg/.work/
+/MuseSync-Setup-*-Windows-x64.exe
+/安装说明.txt
+/待清理-历史文件/
 
 # VST3 SDK（CI 里自动拉取，不入库）
 vst3sdk/

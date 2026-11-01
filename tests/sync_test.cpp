@@ -58,7 +58,23 @@ void savePreview (HWND window, const wchar_t* name)
         const int saved = SaveDC (dc);
         IntersectClipRect (dc, childRect.left, childRect.top, childRect.right, childRect.bottom);
         SetViewportOrgEx (dc, childRect.left, childRect.top, nullptr);
-        SendMessageW (child, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (dc), PRF_CLIENT);
+        wchar_t className[32] {};
+        GetClassNameW (child, className, 32);
+        if (std::wcscmp (className, L"Edit") == 0)
+        {
+            // Native edits skip text painting under a hidden parent; capture their unfocused face.
+            RECT face {};
+            GetClientRect (child, &face);
+            const auto brush = reinterpret_cast<HBRUSH> (SendMessageW (window, WM_CTLCOLOREDIT,
+                reinterpret_cast<WPARAM> (dc), reinterpret_cast<LPARAM> (child)));
+            if (brush) FillRect (dc, &face, brush);
+            SelectObject (dc, reinterpret_cast<HFONT> (SendMessageW (child, WM_GETFONT, 0, 0)));
+            wchar_t value[256] {};
+            GetWindowTextW (child, value, 256);
+            SetBkMode (dc, TRANSPARENT);
+            DrawTextW (dc, value, -1, &face, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        }
+        else SendMessageW (child, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (dc), PRF_CLIENT);
         RestoreDC (dc, saved);
     }
     BITMAPFILEHEADER header {};
@@ -72,6 +88,41 @@ void savePreview (HWND window, const wchar_t* name)
     file.write (reinterpret_cast<const char*> (&info.bmiHeader), sizeof info.bmiHeader);
     file.write (static_cast<const char*> (pixels), bytes);
     check (file.good (), "preview bitmap write");
+    SelectObject (dc, previous);
+    DeleteObject (bitmap);
+    DeleteDC (dc);
+}
+
+void checkWavePaint (HWND waveform, int theme)
+{
+    RECT r {};
+    GetClientRect (waveform, &r);
+    HDC dc = CreateCompatibleDC (nullptr);
+    BITMAPINFO info {};
+    info.bmiHeader.biSize = sizeof (BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = r.right;
+    info.bmiHeader.biHeight = -r.bottom;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    void* pixels = nullptr;
+    HBITMAP bitmap = CreateDIBSection (dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+    check (dc && bitmap && pixels, "wave paint target allocation");
+    const auto previous = SelectObject (dc, bitmap);
+    SendMessageW (waveform, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (dc), PRF_CLIENT);
+    GdiFlush ();
+    const auto* colors = static_cast<const uint32_t*> (pixels);
+    const auto& palette = ap::ui::themes[theme];
+    int wavePixels = 0, audioPixels = 0, scorePixels = 0;
+    for (int i = 0; i < r.right * r.bottom; ++i)
+    {
+        const auto color = colors[i] & 0xffffff;
+        wavePixels += color == palette.muted;
+        audioPixels += color == palette.audioHead;
+        scorePixels += color == palette.scoreHead;
+    }
+    check (wavePixels > 100, "printed waveform contains rendered audio peaks");
+    check (audioPixels > 10, "audio playhead renders in printed waveform");
+    check (scorePixels > 5, "score marker remains visible when playheads coincide");
     SelectObject (dc, previous);
     DeleteObject (bitmap);
     DeleteDC (dc);
@@ -178,7 +229,7 @@ struct Fixture
     }
 };
 
-void writeWave (const std::filesystem::path& path)
+void writeWave (const std::filesystem::path& path, bool dynamics = false)
 {
     std::ofstream file (path, std::ios::binary);
     auto u16 = [&] (uint16_t v) { file.write (reinterpret_cast<char*> (&v), 2); };
@@ -187,7 +238,11 @@ void writeWave (const std::filesystem::path& path)
     file.write ("RIFF", 4); u32 (36 + count * 2); file.write ("WAVEfmt ", 8);
     u32 (16); u16 (1); u16 (1); u32 (48000); u32 (96000); u16 (2); u16 (16);
     file.write ("data", 4); u32 (count * 2);
-    for (int i = 0; i < count; ++i) u16 (static_cast<uint16_t> (static_cast<int16_t> (9000 * std::sin (i * 0.04))));
+    for (int i = 0; i < count; ++i)
+    {
+        const double envelope = dynamics ? .2 + .8 * std::exp (-std::fmod (i / 48000.0, .5) * 7) : 1;
+        u16 (static_cast<uint16_t> (static_cast<int16_t> (18000 * (dynamics ? envelope : .5) * std::sin (i * .04))));
+    }
 }
 
 void hostIdentityTests ()
@@ -480,9 +535,12 @@ void hiddenControlTests (const std::filesystem::path& wave)
     backend.clearLiveScoreMetadata ();
     fixture.block (48000, 0);
     SendMessageW (panel, WM_TIMER, 1200, 0);
+    HWND previewWave = FindWindowExW (panel, nullptr, L"MuseToneWaveView", nullptr);
+    checkWavePaint (previewWave, 0);
     savePreview (panel, L"playback-light.bmp");
     backend.setTheme (1);
     SendMessageW (panel, WM_TIMER, 1200, 0);
+    checkWavePaint (previewWave, 1);
     savePreview (panel, L"playback-dark.bmp");
     backend.setTheme (0);
     SendMessageW (panel, WM_TIMER, 1200, 0);
@@ -647,10 +705,14 @@ void hiddenControlTests (const std::filesystem::path& wave)
     SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1024, BN_CLICKED), 0);
     savePreview (panel, L"guide-midnight.bmp");
     check (!(GetWindowLongPtrW (waveform, GWL_STYLE) & WS_VISIBLE), "guide hides waveform");
+    check ((GetWindowLongPtrW (GetDlgItem (panel, 1033), GWL_STYLE) & WS_VISIBLE) != 0,
+           "guide shows check update button");
+    check (!IsWindowEnabled (GetDlgItem (panel, 1034)), "download disabled until update is available");
     SendMessageW (panel, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM (100, 100));
     check (!(GetWindowLongPtrW (waveform, GWL_STYLE) & WS_VISIBLE), "guide body click does not dismiss it");
     SendMessageW (panel, WM_KEYDOWN, VK_ESCAPE, 0);
     check ((GetWindowLongPtrW (waveform, GWL_STYLE) & WS_VISIBLE) != 0, "Escape closes guide");
+    check (!(GetWindowLongPtrW (GetDlgItem (panel, 1033), GWL_STYLE) & WS_VISIBLE), "closing guide hides updater controls");
     backend.setTheme (0);
     SendMessageW (panel, WM_TIMER, 1200, 0);
     ViewRect compactSize {0, 0, 760, 500};
@@ -663,6 +725,7 @@ void hiddenControlTests (const std::filesystem::path& wave)
     SendMessageW (panel, WM_LBUTTONDOWN, MK_LBUTTON,
                   MAKELPARAM (helpLayout.close.x + 16, helpLayout.close.y + 16));
     check ((GetWindowLongPtrW (waveform, GWL_STYLE) & WS_VISIBLE) != 0, "guide close icon restores controls");
+    savePreview (panel, L"playback-light-compact.bmp");
     const float savedOffset = backend.offsetSec ();
     auto checkFloatingPosition = [&] (HWND strip) {
         RECT collapse {}, expand {};
@@ -847,6 +910,7 @@ int main ()
         transportTests (wave);
         pitchOutputTests (wave);
         liveScoreTests ();
+        writeWave (wave, true);
         hiddenControlTests (wave);
         // Only the explicitly created test directory is removed.
         std::filesystem::remove_all (directory);

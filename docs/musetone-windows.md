@@ -2,14 +2,17 @@
 
 当前发布版：**2.2.0**，同步组件：**MuseSync Bridge 1.3.0**。
 
-原名 MuseTone。为兼容旧谱面，VST3 类 ID、参数状态、安装器身份及底层路径
-`MuseTone.vst3` / `MuseToneSync` 保持不变。显示名称已统一更新，无需手动重命名文件。
+原名 MuseTone。本地更新版的 VST3 文件夹和内部模块已统一为 `MuseSync.vst3`。
+VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保持不变。
+升级会将旧 VST3 副本归档停用，避免重复扫描；不必手动改名。
 
 ## 下载与启用
 
 普通用户下载 `MuseSync-Setup-2.2.0-Windows-x64.exe`，核对同一发布页的
 `SHA256SUMS.txt` 后安装。此 EXE 是安装器，不是独立播放器。
-需要 Windows 10/11 x64 和 MuseScore 4；安装前保存谱面并退出 MuseScore。
+需要 Windows 10/11 x64 和官方 MuseScore 4 安装版；安装前保存谱面并退出 MuseScore。分发时只需发送 EXE，对方无需源码或 ZIP，但仍需安装宿主并启用插件。
+
+MuseScore 3 不支持 VST3，因此不支持本插件。4.0–4.5 已增加旧版 Qt 5 设置读写、数值型时间接口及多声部速度扫描兼容；4.6–4.7 保留新版分段路径。两套接口均有回归测试，但尚未逐个版本实机验证，不能保证所有 4.x 构建。旧版在音符之间的速度标记、渐变速度、反复和播放倍率方面仍可能偏移，推荐较新的官方 4.x。多个 4.x 共存时，Bridge 只安装到向导所选版本，换用其他版本需重新选择目录安装。
 
 安装时选择包含 `bin\MuseScore4.exe` 的 MuseScore 目录，支持其他盘符。
 安装器会同时部署 VST3 和 Bridge。重启后在插件管理中启用 `MuseSync Bridge`，
@@ -20,6 +23,32 @@
 安装器为 Sync 自身文件夹配置用户写入权限，以保存同步快照，其他插件目录不受影响。
 程序说明和卸载入口位于 `C:\Program Files\MuseTone`。卸载前退出 MuseScore，
 再从 Windows 设置的应用列表卸载；用户谱面、音频和其他插件不会被删除。
+
+## 更新与覆盖安装
+
+需要卸载后重装时，先保存谱面并退出 MuseScore，再双击安装包旁的 `Uninstall-MuseSync.vbs`（同目录的 PS1 文件也要保留），允许管理员权限并确认。
+安装目录内也有 `一键卸载 MuseSync` 快捷方式。入口会移除 MuseSync Bridge、MuseSync/MuseTone VST3 及验证过身份的旧版停用文件，保留谱面、音频、其他插件和同步 INI 设置。
+它不会强制关闭 MuseScore；文件被占用时会提示关闭软件后重试。卸载完成后可直接重新运行安装 EXE。
+
+本地更新版在打开插件面板后会后台检查正式发布版本；发现新版时，“？”按钮出现提示点。
+打开“？”使用指南，在底部可查看当前版本、点击“检查更新”，以及“下载更新”。
+安装器直接在插件内下载，显示进度并支持取消，下载完成后自动核对 SHA-256。
+通过校验后按钮变为“安装更新”，确认后打开安装器，不跳转浏览器，不自动关闭 MuseScore。
+检查或下载失败可重试；没有后台常驻服务，关闭插件面板会取消尚未完成的任务。
+更新请求只访问 GitHub 发布下载地址，不需要 GitHub 登录，不上传谱面或伴奏。
+下载保存在 `%LOCALAPPDATA%\MuseSync\Updates`；校验失败的临时文件会删除。
+
+也可以到 [GitHub 发布页](https://github.com/Aigooz/MuseSync/releases/latest)手动下载新版
+`MuseSync-Setup-版本号-Windows-x64.exe` 并核对 `SHA256SUMS.txt`。
+
+1. 保存谱面，退出 MuseScore 及其他正在使用该插件的宿主。
+2. 直接运行新版 EXE，无需先卸载旧版。
+3. 安装器沿用上次安装位置，覆盖 VST3 和 Bridge，并更新同一个卸载入口。
+4. 重启 MuseScore，运行 MuseSync Bridge 后继续使用；若列表仍显示旧名称，重新扫描 VST3。
+
+升级不会替换你的谱面、伴奏文件和 Bridge 的现有 INI 文件；已随谱面保存的插件参数仍由谱面保存。
+如果 MuseScore 已搬到其他目录，请在安装时选择新的目录。
+从 MuseTone 升级时会自动归档停用旧名称的插件，无需手动卸载或改名。
 
 ## 功能
 
@@ -40,15 +69,15 @@ MuseSync 是基于原 `DaweiDrumScore` 源码重做的 Windows VST3 插件，保
 
 ```powershell
 git clone --recurse-submodules https://github.com/steinbergmedia/vst3sdk.git vst3sdk
-cmake -S . -B build-musetone -G "Visual Studio 17 2022" -A x64 -DVST3_SDK_DIR=.\vst3sdk
-cmake --build build-musetone --config Release --parallel
+cmake -S . -B build-musetone-live -G "Visual Studio 17 2022" -A x64 -DVST3_SDK_DIR=.\vst3sdk
+cmake --build build-musetone-live --config Release --parallel
 ```
 
 发布版固定 VST3 SDK 提交 `3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96`，
 SDK 子模块需完整。安装 Inno Setup 6 后，用 PowerShell 7 打包：
 
 ```powershell
-pwsh -File tools/package-windows.ps1 -BuildDirectory build-musetone
+pwsh -File tools/package-windows.ps1 -BuildDirectory build-musetone-live
 ```
 
 生成 EXE、便携 ZIP、包含 SDK 的完整对应源码 ZIP、发布说明和 SHA256 校验文件。
@@ -57,18 +86,18 @@ Windows 使用静态 MSVC 运行库，无需单独安装 VC++ Redistributable。
 VST3 bundle 通常位于：
 
 ```text
-build-musetone/VST3/Release/MuseTone.vst3
+build-musetone-live/VST3/Release/MuseSync.vst3
 ```
 
 标准安装目录为：
 
 ```text
-C:\Program Files\Common Files\VST3\MuseTone.vst3
+C:\Program Files\Common Files\VST3\MuseSync.vst3
 ```
 
 ## 与原版共存
 
-原版 `DaweiDrumScore.vst3` 和原版安装器位于 `dist/windows`，新版产物使用不同 bundle 名称和 UID，目标输出位于 `dist/windows-musetone`，不会覆盖原版文件。安装新版后，MuseScore 里显示为 `MuseSync`。从 MuseTone 升级则使用相同 UID 和路径，直接更新已有安装。
+原版 `DaweiDrumScore.vst3` 和原版安装器在本地整理时归档到 `待清理-历史文件/dist/windows`，新版产物使用不同 bundle 名称和 UID，目标输出位于 `dist/windows-musetone`，不会覆盖原版文件。安装新版后，MuseScore 里显示为 `MuseSync`。从 MuseTone 升级保留相同 UID 和工程状态，将旧 bundle 归档为不可扫描的备份。
 
 ## 当前工程同步
 

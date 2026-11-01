@@ -63,7 +63,7 @@ class Score(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.measure = Measure(self)
-        self.cursor = Cursor(self)
+        self.cursor = (LegacyCursor if os.environ.get("MUSESYNC_LEGACY_API") else Cursor)(self)
         self.selected = Selection(self)
 
     firstMeasure = pyqtProperty(QObject, fget=lambda self: self.measure, constant=True)
@@ -121,15 +121,19 @@ class Settings(QObject):
         return self.settings.value(key, default)
 
 
+class LegacyCursor(Cursor):
+    time = pyqtProperty(float, fget=lambda self: 0.0)
+
+
 app = QGuiApplication([])
+app.setOrganizationName("MuseSyncTests")
+app.setApplicationName("Bridge")
 qmlRegisterType(MuseScore, "MuseScore", 3, 0, "MuseScore")
-qmlRegisterType(Settings, "MuseScore", 3, 0, "Settings")
+if not os.environ.get("MUSESYNC_LEGACY_API"):
+    qmlRegisterType(Settings, "MuseScore", 3, 0, "Settings")
 engine = QQmlEngine()
 source_dir = Path(__file__).resolve().parents[1] / "companion" / "MuseToneSync"
 source = (source_dir / "MuseToneSync.qml").read_text(encoding="utf-8")
-# Qt 5 needs a version; the installed MuseScore uses Qt 6.
-source = source.replace("import QtQuick\n", "import QtQuick 2.7\n")
-source = source.replace("import QtQuick.Window\n", "import QtQuick.Window 2.2\n")
 for name, kind in [("title", "string"), ("description", "string"),
                    ("version", "string"), ("requiresScore", "bool")]:
     source = source.replace("    " + name + ":", "    property " + kind + " " + name + ":")
@@ -148,6 +152,7 @@ with tempfile.TemporaryDirectory(prefix="MuseTone-QML-") as directory:
     assert plugin.property("title") == "MuseSync Bridge"
     assert plugin.property("version") == "1.3.0"
     plugin.run.emit()
+    assert plugin.property("bridge") is not None, "settings initialization failed"
     get_profile = ctypes.windll.kernel32.GetPrivateProfileStringW
     get_profile.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p,
                            ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_wchar_p]
@@ -221,4 +226,5 @@ with tempfile.TemporaryDirectory(prefix="MuseTone-QML-") as directory:
     QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     sip.delete(engine)
     app.processEvents()
-print("PASS: headless QML loading, score API contract, heartbeat, score close and QSettings/Win32 interoperability")
+print("PASS: " + ("legacy Qt.labs.settings / numeric time" if os.environ.get("MUSESYNC_LEGACY_API") else "modern MuseScore.Settings / time()") +
+      "; headless QML loading, heartbeat, seeking, score close and QSettings/Win32 interoperability")

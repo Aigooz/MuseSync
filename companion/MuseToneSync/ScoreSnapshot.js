@@ -39,30 +39,48 @@ function readScore(score, division) {
         measure = measure.nextMeasure;
         ++bar;
     }
-    var tempos = [];
+    var tempos = [], points = [];
     division = Number(division) || 480;
     // next() skips segments without an element in the current track. Position
     // directly on each score segment instead (MuseScore 4.6+), without editing.
-    var segment = directSegments ? score.firstMeasure.firstSegment : cursor.segment;
-    var lastTempo = bpm, lastTick = -1, lastChangeTick = -1, guard = 0;
-    while (segment) {
-        if (++guard > 1000000) return null;
-        if (directSegments) cursor.rewindToFraction(segment.fraction);
-        var tick = Number(cursor.tick), tempo = Number(cursor.tempo) * 60;
-        if (!isFinite(tick) || tick < 0 || tick < lastTick || !isFinite(tempo) || tempo < 1 || tempo > 1000)
-            return null;
+    var tracks = directSegments ? 1 : Math.min(Number(score.ntracks) || 1, 1024);
+    var guard = 0;
+    for (var track = 0; track < tracks; ++track) {
+        if (!directSegments) {
+            cursor = score.newCursor();
+            cursor.filter = -1;
+            cursor.track = track;
+            cursor.rewind(0);
+        }
+        var segment = directSegments ? score.firstMeasure.firstSegment : cursor.segment;
+        var lastTick = -1;
+        while (segment) {
+            if (++guard > 1000000) return null;
+            if (directSegments) cursor.rewindToFraction(segment.fraction);
+            var tick = Number(cursor.tick), tempo = Number(cursor.tempo) * 60;
+            if (!isFinite(tick) || tick < 0 || tick < lastTick || !isFinite(tempo) || tempo < 1 || tempo > 1000)
+                return null;
+            points.push({tick: tick, tempo: tempo, order: points.length});
+            lastTick = tick;
+            if (directSegments) segment = segment.next;
+            else {
+                if (!cursor.next()) break;
+                segment = cursor.segment;
+            }
+        }
+    }
+    points.sort(function(a, b) { return a.tick - b.tick || a.order - b.order; });
+    if (points.length && points[0].tick === 0) bpm = points[0].tempo;
+    // Collapse duplicate segments before comparing tempos (also deterministic on Qt 5).
+    var lastTempo = bpm;
+    for (var i = 0; i < points.length; ++i) {
+        while (i + 1 < points.length && points[i + 1].tick === points[i].tick) ++i;
+        tick = points[i].tick;
+        tempo = points[i].tempo;
         if (Math.abs(tempo - lastTempo) > 0.000001) {
             var point = (tick / division).toFixed(9) + "," + tempo.toFixed(6);
-            if (tick === lastChangeTick) tempos[tempos.length - 1] = point;
-            else tempos.push(point);
-            lastChangeTick = tick;
+            tempos.push(point);
             lastTempo = tempo;
-        }
-        lastTick = tick;
-        if (directSegments) segment = segment.next;
-        else {
-            if (!cursor.next()) break;
-            segment = cursor.segment;
         }
     }
     return { bpm: bpm, beats: initial.beats, denominator: initial.denominator,
@@ -111,6 +129,7 @@ function selectPlaybackPosition(score, seconds, division) {
             var tick = Number(cursor.tick);
             if (!isFinite(tick) || tick < previousTick) return false;
             if (useScoreTime) elapsed = Number(cursor.time(false)) / 1000;
+            else if (typeof cursor.time === "number") elapsed = cursor.time / 1000;
             else {
                 if (!(tempo > 0)) return false;
                 elapsed += (tick - previousTick) / division / tempo;

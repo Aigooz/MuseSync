@@ -64,6 +64,20 @@ changing.newCursor = () => {
 const changingMetadata = api.readScore(changing, 480);
 assert.equal(changingMetadata.tempos, '2.000000000,60.000000;5.000000000,180.000000');
 assert.equal(changingMetadata.changes, '2,3,4');
+const multiTrack = score(1, [[4, 4], [3, 4]]);
+multiTrack.ntracks = 2;
+multiTrack.newCursor = () => {
+    const tracks = [[{tick: 960, tempo: 1}, {tick: 1920, tempo: 1}],
+        [{tick: 0, tempo: 2}, {tick: 480, tempo: 1}, {tick: 1920, tempo: 1}]];
+    let track = 0, i = 0;
+    return {set track(value) {track = value;}, rewind() {i = 0;},
+        next() {return ++i < tracks[track].length;},
+        get segment() {return i < tracks[track].length;},
+        get tick() {return tracks[track][i].tick;}, get tempo() {return tracks[track][i].tempo;}};
+};
+assert.equal(api.readScore(multiTrack, 480).bpm, 120, 'opening tempo on another track');
+assert.equal(api.readScore(multiTrack, 480).tempos, '1.000000000,60.000000',
+    'pre-4.6 cursor must scan all voices and merge their tempo events');
 const segmentScore = score(2, [[4, 4], [3, 4]]);
 let segment = null;
 for (const [tick, tempo] of [[2400, 3], [960, 1], [960, 1.25], [0, 2]])
@@ -107,6 +121,16 @@ const scoreTimed = { ...playable, ntracks: 2,
 assert.equal(api.selectPlaybackPosition(scoreTimed, 1.1, 480), true);
 assert.equal(selected, 'note1', 'score engine time is authoritative across tempo changes and tracks');
 assert.equal(api.selectPlaybackPosition(scoreTimed, 2, 480), true);
+assert.equal(selected.rest, true);
+const legacyTimed = {...scoreTimed, newCursor() {
+    const cursor = scoreTimed.newCursor();
+    const engineTime = cursor.time.bind(cursor);
+    Object.defineProperty(cursor, 'time', {get: () => engineTime(false)});
+    return cursor;
+}};
+assert.equal(api.selectPlaybackPosition(legacyTimed, 1.1, 480), true);
+assert.equal(selected, 'note1', 'early 4.x numeric engine time must not be reintegrated from notes');
+assert.equal(api.selectPlaybackPosition(legacyTimed, 2, 480), true);
 assert.equal(selected.rest, true);
 for (const seconds of [-1, NaN, Infinity])
     assert.equal(api.selectPlaybackPosition(scoreTimed, seconds, 480), false);

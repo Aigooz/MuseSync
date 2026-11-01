@@ -30,7 +30,7 @@ struct Layout
 
 struct GuideLayout
 {
-    Rect title, close, sections[6], about, credit;
+    Rect title, close, sections[6], about, credit, updateStatus, updateCheck, updateAction, updateProgress;
 };
 
 inline GuideLayout arrangeGuide (int width, int height)
@@ -43,8 +43,12 @@ inline GuideLayout arrangeGuide (int width, int height)
     const int row = (h - 164) / 3;
     for (int i = 0; i < 6; ++i)
         l.sections[i] = {24 + (i / 3) * (column + 32), 76 + (i % 3) * row, column, row - 8};
-    l.about = {24, h - 78, w - 48, 42};
-    l.credit = {24, h - 30, w - 48, 18};
+    l.about = {24, h - 78, 210, 22};
+    l.credit = {24, h - 46, 210, 18};
+    l.updateStatus = {254, h - 78, w - 278, 22};
+    l.updateProgress = {254, h - 42, w - 522, 4};
+    l.updateCheck = {w - 252, h - 50, 108, 32};
+    l.updateAction = {w - 132, h - 50, 108, 32};
     return l;
 }
 

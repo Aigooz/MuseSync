@@ -23,7 +23,7 @@
 #   → 产物硬性要求 GLIBC_2.38，Ubuntu 22.04 / Debian 12 直接加载失败。
 #   CI 里有断言守住这一条（见 .github/workflows/build-linux.yml）。
 #
-# 产物：build/**/MuseTone.vst3
+# 产物：Windows build/**/MuseSync.vst3；其他平台 build/**/MuseTone.vst3
 #==============================================================================
 cmake_minimum_required(VERSION 3.20)
 
@@ -114,6 +114,7 @@ if(APPLE)
         source/gui.mm)           # 界面（AppKit）
 elseif(WIN32)
     list(APPEND AP_SOURCES
+        source/win/updater.cpp
         source/win/scoreinfo_win.cpp
         "${VST3_SDK_DIR}/vstgui4/vstgui/thirdparty/miniz/miniz.c"
         source/win/audiofile_win.cpp   # 解码（Media Foundation）
@@ -139,11 +140,18 @@ endif()
 # 目标
 #------------------------------------------------------------------------------
 if(COMMAND smtg_add_vst3plugin)
-    smtg_add_vst3plugin(MuseTone ${AP_SOURCES})
+    if(WIN32)
+        smtg_add_vst3plugin(MuseTone PACKAGE_NAME MuseSync SOURCES_LIST ${AP_SOURCES})
+    else()
+        smtg_add_vst3plugin(MuseTone ${AP_SOURCES})
+    endif()
 else()
     # 兜底：SDK 未提供辅助宏时，手动建一个按 .vst3 命名的模块库
     add_library(MuseTone MODULE ${AP_SOURCES})
     set_target_properties(MuseTone PROPERTIES PREFIX "" SUFFIX ".vst3")
+    if(WIN32)
+        set_target_properties(MuseTone PROPERTIES OUTPUT_NAME MuseSync)
+    endif()
     target_link_libraries(MuseTone PRIVATE sdk pluginterfaces base)
 endif()
 
@@ -168,7 +176,7 @@ if(WIN32)
         dbghelp
         ole32 oleaut32 uuid
         user32 gdi32 comctl32 comdlg32 shell32)
-    target_link_libraries(MuseTone PRIVATE xmllite shlwapi)
+    target_link_libraries(MuseTone PRIVATE xmllite shlwapi winhttp bcrypt)
 elseif(APPLE)
     target_link_libraries(MuseTone PRIVATE
         "-framework AVFoundation"
@@ -245,7 +253,12 @@ if(MUSETONE_BUILD_TESTS)
         target_link_libraries(musetone_sync_test PRIVATE
             sdk sdk_hosting sdk_common pluginterfaces base
             mfplat mfreadwrite mfuuid dbghelp ole32 oleaut32 uuid
-            user32 gdi32 comctl32 comdlg32 shell32 xmllite shlwapi)
+            user32 gdi32 comctl32 comdlg32 shell32 xmllite shlwapi winhttp bcrypt)
         add_test(NAME musetone_sync_test COMMAND musetone_sync_test)
+        add_executable(musesync_updater_test tests/updater_test.cpp source/win/updater.cpp)
+        target_include_directories(musesync_updater_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source")
+        target_link_libraries(musesync_updater_test PRIVATE winhttp bcrypt shell32 ole32 uuid)
+        add_test(NAME musesync_updater_test COMMAND musesync_updater_test)
+        set_tests_properties(musetone_sync_test PROPERTIES ENVIRONMENT "MUSESYNC_DISABLE_UPDATE_CHECK=1")
     endif()
 endif()

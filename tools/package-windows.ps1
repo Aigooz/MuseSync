@@ -19,7 +19,7 @@ if (-not $OutputDirectory) { $OutputDirectory = "dist/releases/$version" }
 $output = AbsolutePath $OutputDirectory
 $installerVersion = Get-Content -LiteralPath (Join-Path $root 'installer/windows/release.ini') -Raw
 if ($installerVersion -notmatch "(?m)^Version=$([regex]::Escape($version))\s*$") { throw 'Installer version differs from CMake version' }
-$bundle = Join-Path $build 'VST3/Release/MuseTone.vst3'
+$bundle = Join-Path $build 'VST3/Release/MuseSync.vst3'
 $info = Get-Content -LiteralPath (Join-Path $bundle 'Contents/Resources/moduleinfo.json') -Raw | ConvertFrom-Json
 if (@($info.Classes | Where-Object Version -ne $version).Count) { throw 'Built VST3 version differs from release version' }
 if (-not $IsccPath) {
@@ -31,6 +31,10 @@ if (-not $IsccPath) {
 }
 if (-not $IsccPath) { throw 'Inno Setup 6 compiler is required' }
 New-Item -ItemType Directory -Path $output -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $root 'installer/windows/INSTALL.txt') -Destination (Join-Path $output '安装说明.txt') -Force
+foreach ($file in @('Uninstall-MuseSync.vbs', 'Uninstall-MuseSync.ps1')) {
+    Copy-Item -LiteralPath (Join-Path $root "installer/windows/$file") -Destination $output -Force
+}
 $notices = Join-Path $build 'release-notices'
 New-Item -ItemType Directory -Path $notices -Force | Out-Null
 $licenses = @{
@@ -48,10 +52,11 @@ foreach ($entry in $licenses.GetEnumerator()) {
 }
 & $IsccPath "/DMyBuildDir=$build" "/DMyOutputDir=$output" (Join-Path $root 'installer/windows/setup-musetone.iss')
 if ($LASTEXITCODE -ne 0) { throw "Installer compiler failed: $LASTEXITCODE" }
-$portable = Join-Path $output "MuseSync-$version-Windows-x64"
+$staging = Join-Path $build ('package-stage-' + [Guid]::NewGuid().ToString('N'))
+$portable = Join-Path $staging "MuseSync-$version-Windows-x64"
 New-Item -ItemType Directory -Path $portable -Force | Out-Null
-$portableBundle = Join-Path $portable 'MuseTone.vst3'
-foreach ($file in @('Contents/x86_64-win/MuseTone.vst3', 'Contents/Resources/moduleinfo.json', 'PlugIn.ico', 'desktop.ini')) {
+$portableBundle = Join-Path $portable 'MuseSync.vst3'
+foreach ($file in @('Contents/x86_64-win/MuseSync.vst3', 'Contents/Resources/moduleinfo.json', 'PlugIn.ico', 'desktop.ini')) {
     $target = Join-Path $portableBundle $file
     New-Item -ItemType Directory -Path (Split-Path $target -Parent) -Force | Out-Null
     Copy-Item -LiteralPath (Join-Path $bundle $file) -Destination $target -Force
@@ -64,6 +69,10 @@ foreach ($file in @('MuseToneSync.qml', 'ScoreSnapshot.js')) {
 foreach ($file in @('LICENSE', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'installer/windows/INSTALL.txt', 'docs/musetone-windows.md')) {
     Copy-Item -LiteralPath (Join-Path $root $file) -Destination $portable -Force
 }
+foreach ($file in @('Uninstall-MuseSync.vbs', 'Uninstall-MuseSync.ps1')) {
+    Copy-Item -LiteralPath (Join-Path $root "installer/windows/$file") -Destination $portable -Force
+}
+Copy-Item -LiteralPath (Join-Path $root 'installer/windows/INSTALL.txt') -Destination (Join-Path $portable '安装说明.txt') -Force
 $portableLicenses = Join-Path $portable 'licenses'
 New-Item -ItemType Directory -Path $portableLicenses -Force | Out-Null
 Get-ChildItem -LiteralPath $notices -File | Copy-Item -Destination $portableLicenses -Force
@@ -90,4 +99,6 @@ $checksums = $assets | ForEach-Object {
 }
 $checksums | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding ascii
 Copy-Item -LiteralPath (Join-Path $root "docs/RELEASE-$version.md") -Destination (Join-Path $output 'RELEASE-NOTES.md') -Force
+Copy-Item -LiteralPath $assets[0] -Destination (Join-Path $root ([IO.Path]::GetFileName($assets[0]))) -Force
+Copy-Item -LiteralPath (Join-Path $root 'installer/windows/INSTALL.txt') -Destination (Join-Path $root '安装说明.txt') -Force
 Get-Item -LiteralPath $assets | Select-Object Name,Length

@@ -1,5 +1,5 @@
-import QtQuick
-import QtQuick.Window
+import QtQuick 2.7
+import QtQuick.Window 2.2
 import MuseScore 3.0
 import "ScoreSnapshot.js" as Snapshot
 
@@ -13,15 +13,25 @@ MuseScore {
     property string scoreSession: ""
     property int sessionCounter: 0
     property string lastCommand: ""
+    property var bridge: null
+    property var commands: null
 
-    Settings {
-        id: bridge
-        fileName: Snapshot.localFilePath(Qt.resolvedUrl("MuseToneSync.ini"))
+    function openSettings(path) {
+        var settings;
+        // Qt 6 hosts provide MuseScore.Settings; early Qt 5 hosts use Qt.labs.
+        // Create lazily so an unavailable module cannot prevent plugin loading.
+        try {
+            settings = Qt.createQmlObject('import MuseScore 3.0; Settings {}', root);
+        } catch (error) {
+            settings = Qt.createQmlObject('import QtQuick 2.7; import Qt.labs.settings 1.0; Settings {}', root);
+        }
+        settings.fileName = path;
+        return settings;
     }
 
-    Settings {
-        id: commands
-        fileName: Snapshot.localFilePath(Qt.resolvedUrl("MuseToneCommands.ini"))
+    function initializeSettings() {
+        if (!bridge) bridge = openSettings(Snapshot.localFilePath(Qt.resolvedUrl("MuseToneSync.ini")));
+        if (!commands) commands = openSettings(Snapshot.localFilePath(Qt.resolvedUrl("MuseToneCommands.ini")));
     }
 
     function updateIdentity() {
@@ -37,6 +47,7 @@ MuseScore {
     }
 
     function publish() {
+        if (!bridge) return false;
         var hex = "";
         try {
             // Read curScore on every pass: a cached binding misses tab switches.
@@ -82,6 +93,7 @@ MuseScore {
     }
 
     function receiveCommand() {
+        if (!commands) return;
         try {
             var score = updateIdentity();
             commands.sync();
@@ -120,6 +132,13 @@ MuseScore {
     }
 
     onRun: {
+        try {
+            initializeSettings();
+        } catch (error) {
+            started.status = "无法启动同步设置组件，请使用官方 MuseScore 4 安装包。";
+            started.show();
+            return;
+        }
         var connected = publish();
         heartbeat.start();
         commandPoll.start();
@@ -132,7 +151,9 @@ MuseScore {
     }
     onScoreStateChanged: changed.restart()
     Component.onDestruction: {
-        bridge.setValue("Snapshot/hex", "");
-        bridge.sync();
+        if (bridge) {
+            bridge.setValue("Snapshot/hex", "");
+            bridge.sync();
+        }
     }
 }

@@ -17,6 +17,7 @@
 #include "numeric_input.h"
 #include "ui_theme.h"
 #include "scorebridge.h"
+#include "updater.h"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <cwchar>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 #pragma comment(lib, "user32.lib")
@@ -157,6 +159,8 @@ enum : int
     IDC_EXPAND,
     IDC_HELP_CLOSE,
     IDC_PROGRESS_SLIDER,
+    IDC_UPDATE_CHECK,
+    IDC_UPDATE_ACTION,
     IDC_TIMER_UI = 1200
 };
 
@@ -357,6 +361,8 @@ public:
     void toggleHelp ();
     /// 关闭使用指南（主窗口被点到时回调）。
     void hideHelp ();
+    void refreshUpdates ();
+    void updateAction ();
     bool helpVisible () const { return m_helpVisible; }
     void setCollapsed (bool collapsed);
     void paintFloating (HDC dc);
@@ -485,6 +491,10 @@ private:
     //    「？帮助」看起来像没反应。改成「隐藏所有控件 + 父窗口整块自绘」后，
     //    层级问题从根上不存在（Linux 端一直是这么做的）。
     bool m_helpVisible = false;
+    updates::Client m_updater {MUSETONE_VERSION};
+    updates::Status m_updateStatus;
+    HWND m_updateCheck = nullptr, m_updateAction = nullptr;
+    bool m_autoUpdateChecked = false;
 
     // ---- 拍号设置弹层 ----
     // ⚠️ 与使用指南同样的理由：不做独立子窗口，而是「隐藏所有控件 + 主窗口整块自绘」
@@ -520,6 +530,7 @@ private:
     std::string m_displayedPath;
 
     HFONT m_font = nullptr, m_fontSmall = nullptr, m_fontBold = nullptr, m_fontIcons = nullptr;
+    HFONT m_fontHeading = nullptr, m_fontMono = nullptr, m_fontPosition = nullptr;
     int   m_tsBoxW = 0;   ///< 拍号条方块宽（按 "12/16" 实测；createFonts 里算）
     HBRUSH m_bgBrush = nullptr;
     HBRUSH m_inputBrush = nullptr;
@@ -671,6 +682,15 @@ void WinView::createFonts ()
     lf.lfWeight = FW_SEMIBOLD;
     m_fontBold = ::CreateFontIndirectW (&lf);
 
+    lf.lfHeight = -std::max (8L, std::lround (13.0 * m_scale));
+    m_fontHeading = ::CreateFontIndirectW (&lf);
+    lf.lfWeight = FW_NORMAL;
+    ::wcscpy_s (lf.lfFaceName, LF_FACESIZE, L"Consolas");
+    m_fontMono = ::CreateFontIndirectW (&lf);
+    lf.lfHeight = -std::max (8L, std::lround (17.0 * m_scale));
+    lf.lfWeight = FW_SEMIBOLD;
+    m_fontPosition = ::CreateFontIndirectW (&lf);
+
     lf.lfHeight = -std::max (8L, std::lround (15.0 * m_scale));
     lf.lfWeight = FW_NORMAL;
     ::wcscpy_s (lf.lfFaceName, LF_FACESIZE, L"Segoe MDL2 Assets");
@@ -680,6 +700,9 @@ void WinView::createFonts ()
     if (!m_fontSmall) m_fontSmall = m_font;
     if (!m_fontBold)  m_fontBold = m_font;
     if (!m_fontIcons) m_fontIcons = m_font;
+    if (!m_fontHeading) m_fontHeading = m_font;
+    if (!m_fontMono) m_fontMono = m_font;
+    if (!m_fontPosition) m_fontPosition = m_font;
 
     // 拍号条方块的宽度：按最宽的拍号文字（"12/16"）【实测】量出来。
     // 绘制与点击命中必须用同一个宽度，写死一个数字迟早会对不上（字体/DPI 都会变）。
@@ -707,13 +730,17 @@ void WinView::deleteFonts ()
         ::DeleteObject (m_fontBold);
     if (m_fontIcons && m_fontIcons != m_font)
         ::DeleteObject (m_fontIcons);
+    for (HFONT font : {m_fontHeading, m_fontMono, m_fontPosition})
+        if (font && font != m_font)
+            ::DeleteObject (font);
     m_font = m_fontSmall = m_fontBold = m_fontIcons = nullptr;
+    m_fontHeading = m_fontMono = m_fontPosition = nullptr;
 }
 
 void WinView::applyFontsToChildren ()
 {
     const HWND normal[] = { m_openBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn, m_expandBtn,
-                            m_helpBtn, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
+                            m_helpBtn, m_updateCheck, m_updateAction, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
                             m_gridCheck, m_numCheck, m_bpmEdit, m_bpmUp, m_bpmDown,
                             m_timesig, m_volSlider, m_progressSlider, m_offsetZero, m_offsetEdit, m_offsetDown, m_offsetUp,
                             m_semitoneEdit, m_semitoneUp, m_semitoneDown,
@@ -721,6 +748,9 @@ void WinView::applyFontsToChildren ()
     for (HWND c : normal)
         if (c)
             ::SendMessageW (c, WM_SETFONT, reinterpret_cast<WPARAM> (m_font), TRUE);
+    for (HWND c : {m_bpmEdit, m_offsetEdit, m_semitoneEdit, m_centsEdit})
+        if (c)
+            ::SendMessageW (c, WM_SETFONT, reinterpret_cast<WPARAM> (m_fontMono), TRUE);
 
     if (m_volSlider)
         ::SendMessageW (m_volSlider, TBM_SETTHUMBLENGTH, px (14), 0);
@@ -825,6 +855,11 @@ bool WinView::create (HWND parent, int w, int h)
     // 「？帮助」：唤出使用指南覆盖层。有用户反馈不知道怎么用，说明书必须能在
     // 界面上直接点开，不能只躺在安装目录的 readme 里。
     m_helpBtn   = mk (L"BUTTON", L"?", BS_PUSHBUTTON, IDC_HELP_BTN);
+    m_updateCheck = mk (L"BUTTON", L"检查更新", BS_PUSHBUTTON, IDC_UPDATE_CHECK);
+    m_updateAction = mk (L"BUTTON", L"下载更新", BS_PUSHBUTTON, IDC_UPDATE_ACTION);
+    ::ShowWindow (m_updateCheck, SW_HIDE);
+    ::ShowWindow (m_updateAction, SW_HIDE);
+    ::EnableWindow (m_updateAction, FALSE);
     m_collapseBtn = mk (L"BUTTON", L"", BS_PUSHBUTTON, IDC_COLLAPSE);
     m_zoomOut   = mk (L"BUTTON", L"−", BS_PUSHBUTTON, IDC_ZOOM_OUT);
     m_zoomIn    = mk (L"BUTTON", L"＋", BS_PUSHBUTTON, IDC_ZOOM_IN);
@@ -891,7 +926,9 @@ bool WinView::create (HWND parent, int w, int h)
         tool.lpszText = const_cast<wchar_t*> (text);
         ::SendMessageW (m_tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM> (&tool));
     };
-    tip (m_helpBtn, L"使用指南");
+    tip (m_helpBtn, L"使用指南与更新");
+    tip (m_updateCheck, L"检查 GitHub 正式发布的新版本");
+    tip (m_updateAction, L"在插件内下载，校验后打开安装器；下载中可取消");
     tip (m_collapseBtn, L"收起为悬浮条（音频继续同步）");
     tip (m_zoomOut, L"缩小波形");
     tip (m_zoomIn, L"放大波形");
@@ -958,6 +995,7 @@ bool WinView::create (HWND parent, int w, int h)
 
 void WinView::destroy ()
 {
+    m_updater.stop ();
     // Restore only a shell that this view hid; never leave a hidden host dialog.
     if (m_collapsed && m_shellWasVisible && ::IsWindow (m_editorShell))
         ::ShowWindow (m_editorShell, SW_SHOWNOACTIVATE);
@@ -1082,6 +1120,9 @@ void WinView::layoutChildren ()
     move (m_themeBtn, l.theme);
     move (m_followScoreCheck, l.followScore);
     move (m_helpBtn, l.help);
+    const auto guide = ui::arrangeGuide (l.width, l.height);
+    move (m_updateCheck, guide.updateCheck);
+    move (m_updateAction, guide.updateAction);
     move (m_collapseBtn, l.collapse);
     move (m_zoomOut, l.zoomOut);
     move (m_zoomIn, l.zoomIn);
@@ -1129,7 +1170,7 @@ void WinView::paintChrome (HDC dc)
         ::MoveToEx (dc, px (x), px (y), nullptr);
         ::LineTo (dc, px (x2), px (y2));
     };
-    HPEN rule = ::CreatePen (PS_SOLID, std::max (1, px (1)), kRule);
+    HPEN rule = ::CreatePen (PS_SOLID, std::max (1, px (1)), kSoftRule);
     HGDIOBJ oldPen = ::SelectObject (dc, rule);
     line (20, 60, l.width - 20, 60);
     line (144, 16, 144, 46);
@@ -1137,13 +1178,16 @@ void WinView::paintChrome (HDC dc)
     line (l.pitch.x - 16, l.sync.y + 4, l.pitch.x - 16, l.sync.bottom ());
 
     // The full input frame belongs to the parent; edit children only paint the value.
+    HPEN inputRule = ::CreatePen (PS_SOLID, std::max (1, px (1)), kRule);
+    ::SelectObject (dc, inputRule);
     HBRUSH input = ::CreateSolidBrush (kSurface);
     HGDIOBJ oldBrush = ::SelectObject (dc, input);
     for (const ui::Rect r : { l.bpm, l.semitone, l.cents, l.offset })
-        ::RoundRect (dc, px (r.x), px (r.y), px (r.right ()), px (r.bottom ()), px (4), px (4));
+        ::RoundRect (dc, px (r.x), px (r.y), px (r.right ()), px (r.bottom ()), px (6), px (6));
     ::SelectObject (dc, oldBrush);
     ::DeleteObject (input);
     ::SelectObject (dc, oldPen);
+    ::DeleteObject (inputRule);
     ::DeleteObject (rule);
 
     auto text = [&] (const std::wstring& value, ui::Rect box, HFONT font,
@@ -1157,11 +1201,18 @@ void WinView::paintChrome (HDC dc)
     ::SetBkMode (dc, TRANSPARENT);
     text (L"MuseSync", {20, 18, 116, 28}, m_fontBold, kInk);
     text (m_fileText, l.file, m_font, kInk);
-    text (m_transportText, l.transport, m_fontSmall, kMuted);
-    text (m_timeText, l.time, m_font, kInk);
-    text (m_musicalText, l.musicalPosition, m_font, kAccent);
-    text (L"同步对齐", l.syncTitle, m_font, kInk);
-    text (L"整曲移调", l.pitchTitle, m_font, kInk);
+    HBRUSH status = ::CreateSolidBrush (m_backend && m_backend->hostTimeline ().playing ? kAccent : kMuted);
+    HGDIOBJ previousBrush = ::SelectObject (dc, status);
+    HGDIOBJ previousPen = ::SelectObject (dc, ::GetStockObject (NULL_PEN));
+    ::Ellipse (dc, px (l.transport.x), px (l.transport.y + 7), px (l.transport.x + 5), px (l.transport.y + 12));
+    ::SelectObject (dc, previousPen);
+    ::SelectObject (dc, previousBrush);
+    ::DeleteObject (status);
+    text (m_transportText, {l.transport.x + 12, l.transport.y, l.transport.w - 12, l.transport.h}, m_fontSmall, kMuted);
+    text (m_timeText, l.time, m_fontMono, kMuted);
+    text (m_musicalText, l.musicalPosition, m_fontPosition, kAccent);
+    text (L"同步对齐", l.syncTitle, m_fontHeading, kInk);
+    text (L"整曲移调", l.pitchTitle, m_fontHeading, kInk);
     text (L"音量", l.volumeLabel, m_fontSmall, kMuted);
     text (L"BPM", l.bpmLabel, m_fontSmall, kMuted);
     text (m_sourceText, l.bpmSource, m_fontSmall, kMuted, DT_RIGHT);
@@ -1221,9 +1272,9 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
         box.right = box.left + px (12);
         box.bottom = box.top + px (12);
 
-        HBRUSH boxBrush = ::CreateSolidBrush (checked ? kInk : kSurface);
+        HBRUSH boxBrush = ::CreateSolidBrush (checked ? kAccent : kSurface);
         HPEN boxPen = ::CreatePen (PS_SOLID, std::max (1, px (1)),
-                                   checked ? kInk : kRule);
+                                   checked ? kAccent : kRule);
         HGDIOBJ oldBrush = ::SelectObject (dis->hDC, boxBrush);
         HGDIOBJ oldPen = ::SelectObject (dis->hDC, boxPen);
         ::Rectangle (dis->hDC, box.left, box.top, box.right, box.bottom);
@@ -1234,7 +1285,7 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
 
         if (checked)
         {
-            HPEN tickPen = ::CreatePen (PS_SOLID, std::max (1, px (1)), kSurface);
+            HPEN tickPen = ::CreatePen (PS_SOLID, std::max (1, px (1)), kPaper);
             oldPen = ::SelectObject (dis->hDC, tickPen);
             ::MoveToEx (dis->hDC, box.left + px (2), box.top + px (6), nullptr);
             ::LineTo (dis->hDC, box.left + px (5), box.bottom - px (3));
@@ -1290,7 +1341,11 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
     HPEN pen = ::CreatePen (PS_SOLID, std::max (1, px (1)), edge);
     HGDIOBJ oldBrush = ::SelectObject (dis->hDC, brush);
     HGDIOBJ oldPen = ::SelectObject (dis->hDC, pen);
-    ::Rectangle (dis->hDC, r.left, r.top, r.right, r.bottom);
+    ::FillRect (dis->hDC, &r, m_bgBrush);
+    if (stepper)
+        ::Rectangle (dis->hDC, r.left, r.top, r.right, r.bottom);
+    else
+        ::RoundRect (dis->hDC, r.left, r.top, r.right, r.bottom, px (6), px (6));
     ::SelectObject (dis->hDC, oldPen);
     ::SelectObject (dis->hDC, oldBrush);
     ::DeleteObject (pen);
@@ -1323,9 +1378,32 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
     }
     ::SetBkMode (dis->hDC, TRANSPARENT);
     ::SetTextColor (dis->hDC, (dis->itemState & ODS_DISABLED) ? kMuted : text);
+    if (dis->CtlID == IDC_OPEN)
+    {
+        RECT folder = r;
+        folder.left += px (10);
+        folder.right = folder.left + px (16);
+        ::SelectObject (dis->hDC, m_fontIcons);
+        ::DrawTextW (dis->hDC, L"\xE8E5", -1, &folder, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        r.left += px (30);
+        r.right -= px (4);
+    }
     ::SelectObject (dis->hDC, icon ? m_fontIcons : m_font);
     ::DrawTextW (dis->hDC, icon ? icon : label, -1, &r,
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    if (dis->CtlID == IDC_HELP_BTN && (m_updateStatus.phase == updates::Phase::available ||
+        m_updateStatus.phase == updates::Phase::ready))
+    {
+        HBRUSH dot = ::CreateSolidBrush (kAccent);
+        RECT badge {r.right - px (8), r.top + px (3), r.right - px (3), r.top + px (8)};
+        HGDIOBJ oldBrush = ::SelectObject (dis->hDC, dot);
+        HGDIOBJ oldPen = ::SelectObject (dis->hDC, ::GetStockObject (NULL_PEN));
+        ::Ellipse (dis->hDC, badge.left, badge.top, badge.right, badge.bottom);
+        ::SelectObject (dis->hDC, oldPen);
+        ::SelectObject (dis->hDC, oldBrush);
+        ::DeleteObject (dot);
+    }
 
     if (focused)
     {
@@ -1434,7 +1512,7 @@ void WinView::paint (HDC target, const RECT& rc)
         m_backend->waveformPeaks (peaks, W, m_viewStart, m_viewStart + m_viewSpan);
         if (!peaks.empty ())
         {
-            HPEN wavePen = ::CreatePen (PS_SOLID, std::max (1, px (1)), kInk);
+            HPEN wavePen = ::CreatePen (PS_SOLID, std::max (1, px (1)), kMuted);
             HPEN oldPen = reinterpret_cast<HPEN> (::SelectObject (dc, wavePen));
             const int mid = waveTop + (H - waveTop) / 2;
             const int n = static_cast<int> (peaks.size ());
@@ -1544,12 +1622,16 @@ void WinView::paint (HDC target, const RECT& rc)
             const int x = secToX (tl0.playheadSec + offset);
             if (x >= 0 && x <= W)
             {
-                HPEN p = ::CreatePen (PS_SOLID, std::max (1, px (2)), kOlive);
+                HPEN p = ::CreatePen (PS_DASH, 1, kOlive);
                 HPEN op = reinterpret_cast<HPEN> (::SelectObject (dc, p));
                 ::MoveToEx (dc, x, waveTop, nullptr);
                 ::LineTo (dc, x, H);
                 ::SelectObject (dc, op);
                 ::DeleteObject (p);
+                HBRUSH marker = ::CreateSolidBrush (kOlive);
+                RECT flag {std::max (0, x - px (4)), H - px (7), std::min (W, x + px (5)), H};
+                ::FillRect (dc, &flag, marker);
+                ::DeleteObject (marker);
             }
         }
 
@@ -1564,6 +1646,14 @@ void WinView::paint (HDC target, const RECT& rc)
                 ::LineTo (dc, x, H);
                 ::SelectObject (dc, op);
                 ::DeleteObject (p);
+                POINT points[] = {{x - px (5), waveTop}, {x + px (5), waveTop}, {x, waveTop + px (7)}};
+                HBRUSH marker = ::CreateSolidBrush (kAccentDark);
+                HGDIOBJ previousBrush = ::SelectObject (dc, marker);
+                HGDIOBJ previousPen = ::SelectObject (dc, ::GetStockObject (NULL_PEN));
+                ::Polygon (dc, points, 3);
+                ::SelectObject (dc, previousPen);
+                ::SelectObject (dc, previousBrush);
+                ::DeleteObject (marker);
             }
         }
 
@@ -1715,15 +1805,24 @@ void WinView::paintFloating (HDC dc)
     ::FrameRect (dc, &r, edge);
     ::DeleteObject (edge);
     ::SetBkMode (dc, TRANSPARENT);
-    ::SelectObject (dc, m_font);
+    ::SelectObject (dc, m_fontHeading);
     ::SetTextColor (dc, kInk);
-    RECT title {px (14), px (8), px (206), px (28)};
+    RECT title {px (14), px (7), px (112), px (28)};
     ::DrawTextW (dc, L"MuseSync", -1, &title, DT_SINGLELINE | DT_VCENTER);
+    ::SelectObject (dc, m_fontPosition);
+    ::SetTextColor (dc, kAccent);
+    RECT position {px (114), px (6), px (208), px (29)};
+    ::DrawTextW (dc, m_musicalText.c_str (), -1, &position,
+                 DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_END_ELLIPSIS | DT_NOPREFIX);
     ::SelectObject (dc, m_fontSmall);
     ::SetTextColor (dc, kMuted);
-    RECT status {px (14), px (30), px (208), px (49)};
-    ::DrawTextW (dc, m_floatingText.c_str (), -1, &status,
+    RECT status {px (14), px (30), px (94), px (49)};
+    ::DrawTextW (dc, m_transportText.c_str (), -1, &status,
                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    ::SelectObject (dc, m_fontMono);
+    RECT time {px (98), px (30), px (208), px (49)};
+    ::DrawTextW (dc, m_timeText.c_str (), -1, &time,
+                 DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
 // 使用指南
@@ -1756,6 +1855,8 @@ void WinView::setHelp (bool on)
     m_helpVisible = on;
 
     showControls (!on);
+    ::ShowWindow (m_updateCheck, on ? SW_SHOW : SW_HIDE);
+    ::ShowWindow (m_updateAction, on ? SW_SHOW : SW_HIDE);
 
     if (on && m_hwnd)
     {
@@ -1787,12 +1888,12 @@ void WinView::paintHelp (HDC dc)
 {
     struct Section { const wchar_t* title; const wchar_t* body; };
     static const Section guide[] = {
-        {L"01  载入音频", L"点「打开音频」或拖入文件。支持 MP3 / WAV / M4A / AAC / FLAC / OGG。\n在乐谱或插件中按空格，跟随宿主播放与暂停。"},
-        {L"02  连接当前谱面", L"从插件菜单运行 MuseSync Bridge，弹窗确认已开启。速度、拍号随谱面变化，切换谱面后刷新。\n关闭「跟随谱面」可手动填写，点波形顶部拍号块可设置换拍。"},
-        {L"03  对齐第一拍", L"按住 Ctrl 或 Alt 拖动网格，将第 1 小节线对准音乐第一拍；加按 Shift 可微调。\n起始偏移支持毫秒输入，旁边的回转箭头可清零。"},
-        {L"04  移调与音量", L"半音 ±24，音分 ±100，两项叠加。变调在后台生成，不改变整曲时长。\n回转箭头恢复原音，底部滑条调整音量。"},
-        {L"05  浏览与定位", L"拖动或滚轮平移；Ctrl / Alt + 滚轮缩放；双击整曲全览。点击波形或拖动时间旁的进度条可定位谱面并播放。\n红线为音频、绿线为谱面。错位时点「回到播放头」，仍异常则重启宿主。"},
-        {L"06  悬浮与主题", L"进度条右侧及悬浮条显示「小节-拍数」，如 73-3。右上角收起后音频继续同步。\n拖动悬浮条移动，点展开或双击还原。调色盘切换主题，配色随工程保存。"},
+        {L"载入音频", L"打开或拖入 MP3 / WAV / M4A / AAC / FLAC / OGG。\n空格键同步谱面与音频的播放、暂停。"},
+        {L"连接谱面", L"运行 MuseSync Bridge，确认开启提示。速度、拍号随谱面变化；切换谱面后刷新。\n关闭「跟随谱面」可手动设置，顶部拍号块可换拍。"},
+        {L"对齐第一拍", L"Ctrl / Alt + 拖动网格，对齐第 1 小节与音乐第一拍；加按 Shift 微调。\n起始偏移可输入毫秒，回转箭头清零。"},
+        {L"移调与音量", L"半音 ±24，音分 ±100，可叠加且不改变时长。\n回转箭头恢复原音，滑条调整音量。"},
+        {L"浏览与定位", L"拖动 / 滚轮平移；Ctrl / Alt + 滚轮缩放；双击全览。点击波形或拖动进度条跳转播放。\n顶部三角为音频，底部方块为谱面；错位时回到播放头，仍异常则重启宿主。"},
+        {L"悬浮与主题", L"主界面与悬浮条均显示「小节-拍数」，如 73-3。\n收起后继续同步；拖动悬浮条移动，点展开或双击还原。调色盘切换主题，随工程保存。"},
     };
     RECT client {};
     ::GetClientRect (m_hwnd, &client);
@@ -1813,7 +1914,7 @@ void WinView::paintHelp (HDC dc)
     close.hDC = dc;
     close.rcItem = rect (l.close);
     drawItem (&close);
-    HBRUSH rule = ::CreateSolidBrush (kRule);
+    HBRUSH rule = ::CreateSolidBrush (kSoftRule);
     for (const int y : {62, l.about.y - 12})
     {
         RECT r {px (24), px (y), client.right - px (24), px (y + 1)};
@@ -1823,16 +1924,79 @@ void WinView::paintHelp (HDC dc)
     for (int i = 0; i < 6; ++i)
     {
         const auto s = l.sections[i];
-        text (guide[i].title, {s.x, s.y, s.w, 22}, m_font, kInk, DT_SINGLELINE | DT_VCENTER);
+        wchar_t number[8] {};
+        std::swprintf (number, 8, L"%02d", i + 1);
+        text (number, {s.x, s.y, 28, 22}, m_fontMono, kAccent, DT_SINGLELINE | DT_VCENTER);
+        text (guide[i].title, {s.x + 34, s.y, s.w - 34, 22}, m_fontHeading, kInk, DT_SINGLELINE | DT_VCENTER);
         text (guide[i].body, {s.x, s.y + 28, s.w, s.h - 28}, m_fontSmall, kMuted,
               DT_WORDBREAK | DT_EDITCONTROL);
     }
-    text (L"关于", {l.about.x, l.about.y, 64, 20}, m_font, kInk, DT_SINGLELINE);
-    text (L"MuseSync  ·  谱伴同步", {l.about.x + 72, l.about.y, l.about.w - 72, 20},
-          m_font, kInk, DT_SINGLELINE);
-    text (L"基于 DaweiDrumScore 开源项目  /  GPL-3.0", {l.about.x + 72, l.about.y + 23, l.about.w - 72, 18},
-          m_fontSmall, kMuted, DT_SINGLELINE);
-    text (L"@爱鸽咕子", l.credit, m_fontSmall, kMuted, DT_SINGLELINE | DT_RIGHT);
+    text (utf8ToWide (std::string ("MuseSync  ") + MUSETONE_VERSION).c_str (), l.about,
+          m_fontHeading, kInk, DT_SINGLELINE);
+    text (L"关于  ·  @爱鸽咕子", l.credit, m_fontSmall, kMuted, DT_SINGLELINE);
+    std::wstring message = m_updateStatus.message.empty () ? L"更新" : m_updateStatus.message;
+    if (m_updateStatus.phase == updates::Phase::downloading)
+    {
+        wchar_t amount[96] {};
+        if (m_updateStatus.total)
+            std::swprintf (amount, 96, L"正在下载  %.1f / %.1f MB", m_updateStatus.received / 1048576.0, m_updateStatus.total / 1048576.0);
+        else std::swprintf (amount, 96, L"正在下载  %.1f MB", m_updateStatus.received / 1048576.0);
+        message = amount;
+    }
+    text (message.c_str (), l.updateStatus, m_fontSmall, kMuted, DT_SINGLELINE | DT_END_ELLIPSIS);
+    RECT track = rect (l.updateProgress);
+    HBRUSH bg = ::CreateSolidBrush (kSoftRule);
+    ::FillRect (dc, &track, bg);
+    ::DeleteObject (bg);
+    if (m_updateStatus.phase == updates::Phase::ready || m_updateStatus.total)
+    {
+        const double ratio = m_updateStatus.phase == updates::Phase::ready ? 1.0 :
+            std::min (1.0, double (m_updateStatus.received) / m_updateStatus.total);
+        track.right = track.left + static_cast<int> ((track.right - track.left) * ratio);
+        HBRUSH fill = ::CreateSolidBrush (kAccent);
+        ::FillRect (dc, &track, fill);
+        ::DeleteObject (fill);
+    }
+}
+
+void WinView::refreshUpdates ()
+{
+    if (!m_autoUpdateChecked && !::GetEnvironmentVariableW (L"MUSESYNC_DISABLE_UPDATE_CHECK", nullptr, 0))
+    {
+        m_autoUpdateChecked = true;
+        m_updater.check ();
+    }
+    const auto status = m_updater.status ();
+    if (status.revision == m_updateStatus.revision) return;
+    m_updateStatus = status;
+    const bool busy = status.phase == updates::Phase::checking || status.phase == updates::Phase::downloading;
+    const bool newer = !status.release.filename.empty () && updates::newerVersion (status.release.version, MUSETONE_VERSION);
+    ::EnableWindow (m_updateCheck, !busy);
+    ::EnableWindow (m_updateAction, status.phase == updates::Phase::available ||
+        status.phase == updates::Phase::ready || status.phase == updates::Phase::downloading ||
+        (status.phase == updates::Phase::failed && newer));
+    ::SetWindowTextW (m_updateAction, status.phase == updates::Phase::downloading ? L"取消下载" :
+        status.phase == updates::Phase::ready ? L"安装更新" : L"下载更新");
+    ::InvalidateRect (m_helpBtn, nullptr, FALSE);
+    if (m_helpVisible) ::InvalidateRect (m_hwnd, nullptr, FALSE);
+}
+
+void WinView::updateAction ()
+{
+    const auto s = m_updater.status ();
+    if (s.phase == updates::Phase::downloading) { m_updater.cancel (); return; }
+    if (s.phase != updates::Phase::ready) { m_updater.download (); refreshUpdates (); return; }
+    if (::MessageBoxW (m_hwnd,
+        L"安装器已下载并通过校验。\n\n请先保存谱面，关闭 MuseScore 及其他使用该插件的软件，再继续安装。无需卸载旧版。\n\n现在打开安装器？",
+        L"MuseSync 更新", MB_OKCANCEL | MB_ICONINFORMATION) != IDOK) return;
+    try
+    {
+        // Recheck immediately before launch in case the saved download was modified.
+        if (updates::sha256File (s.installer) != s.release.sha256) throw std::runtime_error ("checksum");
+        if (reinterpret_cast<INT_PTR> (::ShellExecuteW (m_hwnd, L"open", s.installer.c_str (), nullptr,
+            s.installer.parent_path ().c_str (), SW_SHOWNORMAL)) <= 32) throw std::runtime_error ("launch");
+    }
+    catch (...) { ::MessageBoxW (m_hwnd, L"无法打开安装器或文件校验失败，请重新检查并下载。", L"MuseSync 更新", MB_OK | MB_ICONERROR); }
 }
 
 //------------------------------------------------------------------------------
@@ -1882,7 +2046,8 @@ std::vector<TsStripBox> WinView::tsStripBoxes () const
         const int x = secToX (m.startSec);
 
         TsStripBox b;
-        b.rc      = { x - w / 2, boxTop, x + w / 2, boxBot };
+        const int left = std::clamp (x - w / 2, 0, std::max (0, m_waveW - w));
+        b.rc      = { left, boxTop, std::min (m_waveW, left + w), boxBot };
         b.bar     = m.bar;
         b.beats   = m.beats;
         b.denom   = m.denom;
@@ -2467,6 +2632,7 @@ void WinView::centerViewOn (double sec)
 
 void WinView::onTimer ()
 {
+    refreshUpdates ();
     // 宿主容器窗口若装不下我们（老版本可能给了个 340 宽的窗口），先缩回去，
     // 否则右侧那排按钮会被父窗口裁掉 —— 那比界面窄更糟。
     syncSizeToParent ();
@@ -3106,7 +3272,7 @@ void WinView::paintTimeSigControl (HDC dc)
     RECT label = r;
     label.left += px (12);
     label.right -= px (32);
-    HGDIOBJ oldFont = ::SelectObject (dc, m_font);
+    HGDIOBJ oldFont = ::SelectObject (dc, m_fontMono);
     ::SetBkMode (dc, TRANSPARENT);
     ::SetTextColor (dc, kInk);
     ::DrawTextW (dc, value, -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -3114,7 +3280,8 @@ void WinView::paintTimeSigControl (HDC dc)
     arrow.left = arrow.right - px (28);
     ::SelectObject (dc, m_fontIcons);
     ::SetTextColor (dc, kMuted);
-    ::DrawTextW (dc, L"\xE70D", -1, &arrow, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    ::DrawTextW (dc, m_backend && m_backend->followScore () ? L"\xE72E" : L"\xE70D", -1, &arrow,
+                 DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     ::SelectObject (dc, oldFont);
     if (::GetFocus () == m_timesig)
     {
@@ -3401,6 +3568,13 @@ void WinView::onCommand (int id, int notify)
 {
     switch (id)
     {
+        case IDC_UPDATE_CHECK:
+            m_updater.check ();
+            refreshUpdates ();
+            break;
+        case IDC_UPDATE_ACTION:
+            updateAction ();
+            break;
         case IDC_OPEN:
             openFileDialog ();
             break;
@@ -3651,6 +3825,13 @@ LRESULT CALLBACK waveProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 
     switch (msg)
     {
+        case WM_PRINTCLIENT:
+        {
+            RECT r {};
+            ::GetClientRect (hwnd, &r);
+            if (v) v->paint (reinterpret_cast<HDC> (wp), r);
+            return 0;
+        }
         case WM_PAINT:
         {
             PAINTSTRUCT ps;

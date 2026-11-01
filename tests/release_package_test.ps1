@@ -21,15 +21,19 @@ if ($exe.VersionInfo.ProductName -notlike 'MuseSync*') { throw 'Installer brand 
 $archives = @{
     "MuseSync-$version-Source.zip" = @(
         'CMakeLists.txt', 'source/win/gui_win.cpp', 'companion/MuseToneSync/MuseToneSync.qml',
-        'installer/windows/release.ini', 'vst3sdk/LICENSE.txt', 'vst3sdk/pluginterfaces/LICENSE.txt',
+        'installer/windows/release.ini', 'installer/windows/ChineseSimplified.isl',
+        'vst3sdk/LICENSE.txt', 'vst3sdk/pluginterfaces/LICENSE.txt',
         'vst3sdk/public.sdk/LICENSE.txt', 'vst3sdk/base/LICENSE.txt',
         'vst3sdk/vstgui4/vstgui/thirdparty/miniz/miniz.c', 'vst3sdk/cmake/modules/SMTG_PlatformToolset.cmake'
     )
     "MuseSync-$version-Windows-x64.zip" = @(
-        "MuseSync-$version-Windows-x64/MuseTone.vst3/Contents/x86_64-win/MuseTone.vst3",
+        "MuseSync-$version-Windows-x64/MuseSync.vst3/Contents/x86_64-win/MuseSync.vst3",
         "MuseSync-$version-Windows-x64/MuseToneSync/MuseToneSync.qml",
         "MuseSync-$version-Windows-x64/licenses/signalsmith-stretch.txt",
-        "MuseSync-$version-Windows-x64/INSTALL.txt"
+        "MuseSync-$version-Windows-x64/INSTALL.txt",
+        "MuseSync-$version-Windows-x64/安装说明.txt",
+        "MuseSync-$version-Windows-x64/Uninstall-MuseSync.vbs",
+        "MuseSync-$version-Windows-x64/Uninstall-MuseSync.ps1"
     )
 }
 foreach ($item in $archives.GetEnumerator()) {
@@ -44,7 +48,15 @@ foreach ($item in $archives.GetEnumerator()) {
         }
         if ($unwanted) { throw "Unwanted archive entries: $($unwanted -join ', ')" }
         if ($item.Key.EndsWith('Windows-x64.zip')) {
-            $entry = $zip.GetEntry("MuseSync-$version-Windows-x64/MuseTone.vst3/Contents/Resources/moduleinfo.json")
+            $entry = $zip.GetEntry("MuseSync-$version-Windows-x64/安装说明.txt")
+            $stream = $entry.Open()
+            try { $guideHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)) }
+            finally { $stream.Dispose() }
+            if ($guideHash -ne (Get-FileHash -LiteralPath (Join-Path $root 'installer/windows/INSTALL.txt')).Hash) {
+                throw 'Stale Chinese installation instructions in portable archive'
+            }
+            if ($names -match '/MuseTone\.vst3/') { throw 'Portable archive contains the legacy bundle name' }
+            $entry = $zip.GetEntry("MuseSync-$version-Windows-x64/MuseSync.vst3/Contents/Resources/moduleinfo.json")
             $reader = [IO.StreamReader]::new($entry.Open())
             try { $info = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
             if ($info.'Factory Info'.Vendor -ne 'MuseSync') { throw 'VST3 factory brand mismatch' }
@@ -57,7 +69,9 @@ foreach ($item in $archives.GetEnumerator()) {
         }
         if ($item.Key.EndsWith('Source.zip')) {
             foreach ($file in @('CMakeLists.txt', 'source/aplaysdk.cpp', 'source/win/gui_win.cpp',
-                    'companion/MuseToneSync/MuseToneSync.qml', '.github/workflows/build-windows.yml')) {
+                    'companion/MuseToneSync/MuseToneSync.qml', '.github/workflows/build-windows.yml',
+                    'installer/windows/ChineseSimplified.isl', 'installer/windows/setup-musetone.iss',
+                    'installer/windows/INSTALL.txt')) {
                 $entry = $zip.GetEntry($file)
                 $stream = $entry.Open()
                 try { $archivedHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream)) }

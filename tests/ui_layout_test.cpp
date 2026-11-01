@@ -31,7 +31,8 @@ int main ()
                 const auto l = ap::ui::arrange (width, height);
                 const auto guide = ap::ui::arrangeGuide (width, height);
                 const ap::ui::Rect panel {0, 0, l.width, l.height};
-                std::vector<ap::ui::Rect> guideBoxes {guide.title, guide.close, guide.about, guide.credit};
+                std::vector<ap::ui::Rect> guideBoxes {guide.title, guide.close, guide.about, guide.credit,
+                    guide.updateStatus, guide.updateProgress, guide.updateCheck, guide.updateAction};
                 for (auto section : guide.sections) guideBoxes.push_back (section);
                 for (size_t i = 0; i < guideBoxes.size (); ++i)
                 {

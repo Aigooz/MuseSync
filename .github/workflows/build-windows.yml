@@ -33,10 +33,16 @@ jobs:
         run: cmake --build build --config Release --parallel 4
       - name: Regression tests
         run: ctest --test-dir build -C Release --output-on-failure
+      - name: Uninstall compatibility (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./tests/uninstall_test.ps1 -BuildDirectory build
+      - name: Uninstall compatibility (PowerShell 7)
+        shell: pwsh
+        run: ./tests/uninstall_test.ps1 -BuildDirectory build
       - name: VST3 validator
         shell: pwsh
         run: |
-          & ./build/bin/Release/validator.exe ./build/VST3/Release/MuseTone.vst3
+          & ./build/bin/Release/validator.exe ./build/VST3/Release/MuseSync.vst3
           if ($LASTEXITCODE -ne 0) { throw 'VST3 validation failed' }
       - name: QML bridge tests
         shell: pwsh

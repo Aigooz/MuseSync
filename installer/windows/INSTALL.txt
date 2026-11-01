@@ -1,55 +1,105 @@
-MuseSync 2.2.0 / Windows x64
+MuseSync 2.2.0 | Windows 64 位安装说明
+====================================
 
-This EXE installs a MuseScore VST3 plugin, not a standalone audio player.
-Windows 10/11 x64 and MuseScore 4 are required (target environment: 4.7).
-Automated tests do not replace testing inside your MuseScore installation.
-Save your score and close MuseScore before installing or upgrading.
+MuseSync 是配合 MuseScore 使用的 VST3 插件，不是独立播放器。
+系统要求：Windows 10/11 64 位、官方 MuseScore 4 安装版。
+给其他 Windows 用户只需发送 EXE；其中包含 VST3、Bridge 和卸载程序，
+无需附带工程或 ZIP。对方仍需自行安装 MuseScore 4，并按下文启用插件。
+安装或升级前，请先保存谱面，退出 MuseScore 和其他 VST3 宿主。
 
-INSTALL
-1. Run MuseSync-Setup-2.2.0-Windows-x64.exe as administrator.
-2. Select the MuseScore installation folder containing bin\MuseScore4.exe.
-   Custom installations, including other drives, are supported.
-3. The installer installs both MuseSync VST3 and MuseSync Bridge.
-   The MuseToneSync folder allows Users to write sync snapshots without
-   running MuseScore as administrator; no other plugin folders are changed.
-4. Restart MuseScore. In Plugin Manager, enable MuseSync Bridge.
-5. Run MuseSync Bridge from the Plugins menu once per MuseScore session.
-   A popup confirms that the background sync service has started.
-6. In the mixer, add MuseSync as a VST3 instrument on an output channel.
-   Keep that channel unmuted. Open its editor and load your accompaniment.
+版本兼容说明
+------------
+- MuseScore 3：不支持。宿主本身不支持 VST3，安装器会拒绝该路径。
+- MuseScore 4.0–4.5：已增加旧版 Qt 5 设置组件、数值型播放时间接口
+  和多声部速度读取兼容；通过模拟接口与 Qt 5 回归测试，待逐版本实机验证。
+- MuseScore 4.6–4.7：保留按谱面分段读取的新版接口路径，目标环境为 4.7。
+  不将自动化测试等同于所有补丁版本、所有谱面的实际验证。
+- 不保证未来版本、第三方修改版、便携版和非 Windows 系统可用。
+  旧版 4.x 中，音符之间的速度标记、渐变速度、反复和播放倍率仍可能
+  存在同步偏差，推荐优先使用较新的官方 4.x 版本。
+- 同机安装多个 MuseScore 4 时，安装器只为选择的那一个部署 Bridge；
+  换用另一个版本需重新运行安装器并选择对应目录，VST3 共享安装。
 
-USE
-- Playback follows MuseScore. Align the audio's first beat with the score
-  using the offset control. Ctrl/Alt drag adjusts alignment.
-- Keep score-follow enabled for tempo and meter changes.
-- The progress bar supports seeking; its right-hand display shows
-  measure-beat, for example 73-3. The floating strip also shows this.
-- Pitch shift preserves duration. Audio is not automatically time-stretched.
-- Repeat expansion and temporary playback-speed multipliers have limitations.
-- The question-mark button opens the built-in Chinese guide.
+一、安装与启用
+--------------
+1. 双击 MuseSync-Setup-2.2.0-Windows-x64.exe，允许管理员权限。
+2. 选择 MuseScore 4 的安装文件夹。文件夹内应包含
+   bin\MuseScore4.exe，不是存放谱面的文件夹，支持其他盘符。
+3. 安装器会同时安装 MuseSync VST3 和 MuseSync Bridge。
+   会为 Bridge 自身文件夹配置写入同步快照的权限，其他插件不受影响。
+4. 重新打开 MuseScore，在插件管理中启用 MuseSync Bridge。
+5. 每次启动 MuseScore 后，从插件菜单运行一次 MuseSync Bridge。
+   出现“已开启”提示后，后台同步就已启动。
+6. 在混音器中为输出通道选择 MuseSync VST3 音源，保持通道未静音，
+   打开插件面板，载入伴奏音频。
 
-MANUAL ZIP INSTALL
-Copy the entire MuseTone.vst3 folder to:
+二、播放与同步
+--------------
+- 播放跟随 MuseScore。通过“起始偏移”对齐伴奏第一拍与谱面，
+  也可按住 Ctrl / Alt 拖动波形来微调。
+- 开启“跟随谱面”，速度、拍号及中途变化会随播放位置更新。
+- 进度条支持跳转；右侧显示“小节-拍数”，例如 73-3。
+  收起后的悬浮条也会显示小节和拍数，点击展开即可恢复完整面板。
+- 变调保持音频时长，不会根据谱面变速自动拉伸伴奏。
+- 反复展开、临时播放速度倍率仍有同步限制。
+- 点击面板右上角“？”可查看中文使用指南、关于信息和更新状态。
+
+三、更新与覆盖安装
+------------------
+打开插件面板后，会后台检查 GitHub 上的正式发布版本。
+发现新版时，“？”按钮会出现提示点。在指南中点击“检查更新”或
+“下载更新”，即可在插件内下载安装包，无需跳转浏览器。
+下载显示进度并支持取消；通过 SHA-256 校验后，点击“安装更新”，
+确认后打开安装器。请先保存工作并手动退出 MuseScore。
+
+直接运行新版 EXE 即可覆盖安装，不需要先卸载旧版。
+安装器沿用上次的位置，覆盖 VST3 和 Bridge，更新同一个卸载入口。
+谱面、音频、已有同步 INI 文件不会被替换；插件参数请先随谱面保存。
+MuseScore 搬到其他位置后，请在向导中重新选择它的安装文件夹。
+
+更新检查不需要 GitHub 登录，不上传谱面或伴奏。
+网络无法访问 GitHub 时，检查或下载会失败，可以稍后重试。
+关闭插件面板会取消尚未完成的请求。下载保存在：
+  %LOCALAPPDATA%\MuseSync\Updates
+也可手动访问发布页下载新版，并核对同一发布页的 SHA256SUMS.txt：
+  https://github.com/Aigooz/MuseSync/releases/latest
+
+四、一键卸载与重装
+------------------
+先保存工作，关闭 MuseScore 和其他 VST3 宿主。
+- 在此工程根目录：双击“一键卸载 MuseSync.vbs”。
+  请保留工程中的 installer\windows 文件夹，入口依赖其中的脚本。
+- 在发布包中：双击 Uninstall-MuseSync.vbs，并保留旁边的同名 PS1 文件。
+- 安装后：打开 C:\Program Files\MuseTone，双击“一键卸载 MuseSync”
+  快捷方式；也可从 Windows 设置的应用列表卸载。
+
+一键卸载会请求管理员权限，并在确认后移除 Bridge、MuseSync/MuseTone
+VST3 以及经过身份验证的旧版停用文件，包含在已识别安装位置手动部署的副本。
+它会保留谱面、音频、其他插件和同步 INI 设置，不会强制关闭 MuseScore。
+文件被占用时，请关闭宿主后重试。卸载完成后重新运行 EXE 即可重装。
+
+五、ZIP 手动安装
+---------------
+将完整的 MuseSync.vst3 文件夹复制到：
   C:\Program Files\Common Files\VST3
-Copy MuseToneSync to the plugins folder in your MuseScore installation.
-MuseToneSync must be writable by the Windows user running MuseScore.
-Use the EXE installer to configure this permission automatically.
-Then follow steps 4-6 above.
+将 MuseToneSync 文件夹复制到 MuseScore 安装位置下的 plugins 文件夹。
+MuseToneSync 必须允许当前 Windows 用户写入；推荐使用 EXE 自动配置。
+复制后，按“一、安装与启用”中的第 4 至 6 步操作。
 
-UPGRADE COMPATIBILITY
-Previously named MuseTone. VST3 class IDs, saved state, installer identity,
-MuseTone.vst3 and MuseToneSync paths are deliberately unchanged so existing
-scores and installations continue to find the same plugin. Do not rename
-these folders manually. Instructions/uninstaller remain in Program Files\MuseTone.
+六、旧名称兼容与安全提示
+-----------------------
+本软件原名 MuseTone，VST3 文件夹及模块现已统一为 MuseSync.vst3。
+为兼容已保存的谱面，类 ID、参数状态、安装器身份和 MuseToneSync
+同步路径保持不变，因此说明与卸载程序仍位于 Program Files\MuseTone。
+安装器会将旧版插件归档为 .disabled 备份，避免重复扫描。
+使用 ZIP 手动升级时，请先把旧 MuseTone.vst3 移出 VST3 扫描目录。
 
-SECURITY AND UNINSTALL
-The installer is not code-signed. Verify its SHA256 against the release's
-SHA256SUMS.txt. Follow your Windows security policy if SmartScreen warns.
-Uninstall MuseSync from Windows Settings > Apps after closing MuseScore.
-Uninstallation does not delete your scores, audio files or other VST3 plugins.
+安装器尚未进行代码签名。请核对来源和 SHA-256，遇到 SmartScreen
+提示时遵循本机安全策略。自动化测试不能代替实际 MuseScore 内的试用。
 
-LICENSE
-GPL-3.0. Source code must be available with the matching release.
-Third-party license notices are installed alongside these instructions.
-MuseSync (formerly MuseTone) is based on the DaweiDrumScore open-source project.
-Customization credit: @爱鸽咕子
+七、许可与关于
+--------------
+本软件遵循 GPL-3.0，许可证以随附 LICENSE 英文原文为准。
+完整对应源码随同版本发布，第三方许可与来源见 THIRD_PARTY_NOTICES.md
+及 licenses 文件夹。
+定制：@爱鸽咕子
