@@ -95,9 +95,12 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           VERSION="${TAG#v}"
-          test -f "release-files/MuseSync-Setup-${VERSION}-Windows-x64.exe"
+          INSTALLER="$(find release-files -type f -name "MuseSync-Setup-${VERSION}-Windows-x64.exe")"
+          test -n "$INSTALLER"
+          test -f "$INSTALLER"
+          RELEASE_DIR="$(dirname "$INSTALLER")"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; preserving published assets."
           else
-            gh release create "$TAG" release-files/*.exe release-files/*.zip release-files/SHA256SUMS.txt --verify-tag --title "MuseSync $VERSION" --notes-file release-files/RELEASE-NOTES.md
+            gh release create "$TAG" "$RELEASE_DIR"/*.exe "$RELEASE_DIR"/*.zip "$RELEASE_DIR/SHA256SUMS.txt" --verify-tag --title "MuseSync $VERSION" --notes-file "$RELEASE_DIR/RELEASE-NOTES.md"
           fi
