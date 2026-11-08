@@ -31,10 +31,10 @@ jobs:
         shell: powershell
         run: |
           $version = '1.0.2903.40'
-          $archive = Join-Path $env:RUNNER_TEMP "Microsoft.Web.WebView2.$version.nupkg"
+          $archive = Join-Path $env:RUNNER_TEMP "Microsoft.Web.WebView2.$version.zip"
           $sdk = Join-Path $env:RUNNER_TEMP 'webview2-sdk'
           Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/$version/microsoft.web.webview2.$version.nupkg" -OutFile $archive
-          [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $sdk)
+          Expand-Archive -LiteralPath $archive -DestinationPath $sdk -Force
           "WEBVIEW2_SDK_DIR=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Configure
         run: cmake -S . -B build -A x64 -DMUSETONE_BUILD_TESTS=ON -DWEBVIEW2_SDK_DIR="$env:WEBVIEW2_SDK_DIR"
