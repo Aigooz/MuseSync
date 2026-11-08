@@ -154,7 +154,6 @@ enum : int
     //    （MAKEINTRESOURCE(32651)）。同名枚举项会被宏展开成一串语法垃圾，
     //    MSVC 只报 "syntax error: missing '}' before '('"，很难看出是宏冲突。
     IDC_HELP_BTN,
-    IDC_OPEN_VIDEO,
     IDC_OFFSET_EDIT,
     IDC_RESERVED_VOLUME_EDIT,
     IDC_OFFSET_DOWN,
@@ -165,6 +164,7 @@ enum : int
     IDC_PROGRESS_SLIDER,
     IDC_UPDATE_CHECK,
     IDC_UPDATE_ACTION,
+    IDC_OPEN_VIDEO,
     IDC_OPEN_VIDEO_LOCAL = 1401,
     IDC_OPEN_VIDEO_URL,
     IDC_TIMER_UI = 1200

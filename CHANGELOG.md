@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.2 - 2026-11-08
+
+- 恢复原有控件编号，修正进度条回归测试失败。
+
 ## 2.4.1 - 2026-11-08
 
 - Synchronize accessible video players with score playback, seeking and playback speed.
