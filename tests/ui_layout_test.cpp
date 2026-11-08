@@ -41,7 +41,7 @@ int main ()
                         if (overlaps (guideBoxes[i], guideBoxes[j])) return 1;
                 }
                 const std::vector<ap::ui::Rect> controls {
-                    l.file, l.transport, l.time, l.progress, l.musicalPosition, l.wave, l.open, l.score, l.theme, l.help, l.collapse, l.followScore,
+                    l.file, l.transport, l.time, l.progress, l.musicalPosition, l.wave, l.open, l.video, l.score, l.theme, l.help, l.collapse, l.followScore,
                     l.grid, l.numbers, l.zoomOut, l.zoomIn, l.zoomFit, l.follow,
                     l.syncTitle, l.pitchTitle, l.bpmLabel, l.bpmSource, l.timeSigLabel,
                     l.offsetLabel, l.semitoneLabel, l.centsLabel, l.volumeLabel,

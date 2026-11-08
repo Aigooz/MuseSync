@@ -76,6 +76,7 @@ const int kPanelWMin = ap::ui::minWidth;
 const int kPanelHMin = ap::ui::minHeight;
 const int kPanelWMax = 1700;
 const int kPanelHMax = 1200;
+const COLORREF kUpdateAlert = RGB (220, 55, 55);
 const int kWaveW  = 720;      ///< 波形区最小宽（面板缩到下限时用它兜底）
 const int kWaveH  = 150;      ///< 波形区最小高
 
@@ -153,6 +154,7 @@ enum : int
     //    （MAKEINTRESOURCE(32651)）。同名枚举项会被宏展开成一串语法垃圾，
     //    MSVC 只报 "syntax error: missing '}' before '('"，很难看出是宏冲突。
     IDC_HELP_BTN,
+    IDC_OPEN_VIDEO,
     IDC_OFFSET_EDIT,
     IDC_RESERVED_VOLUME_EDIT,
     IDC_OFFSET_DOWN,
@@ -176,6 +178,10 @@ struct VideoUrlPrompt
 {
     HWND window = nullptr;
     HWND edit = nullptr;
+    HWND label = nullptr;
+    HWND hint = nullptr;
+    HWND open = nullptr;
+    HWND cancel = nullptr;
     std::wstring* value = nullptr;
     bool accepted = false;
 };
@@ -196,19 +202,55 @@ LRESULT CALLBACK videoUrlPromptProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
         case WM_CREATE:
         {
-            prompt->edit = ::CreateWindowExW (WS_EX_CLIENTEDGE, L"EDIT", L"https://www.bilibili.com/",
-                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 18, 48, 424, 28, hwnd,
-                reinterpret_cast<HMENU> (1), ::GetModuleHandleW (nullptr), nullptr);
-            ::CreateWindowW (L"STATIC", L"输入视频网址（支持 Bilibili 等 http/https 页面）",
-                WS_CHILD | WS_VISIBLE, 18, 18, 424, 22, hwnd,
+            prompt->label = ::CreateWindowW (L"STATIC", L"视频网页地址",
+                WS_CHILD | WS_VISIBLE, 24, 20, 512, 22, hwnd,
                 nullptr, ::GetModuleHandleW (nullptr), nullptr);
-            ::CreateWindowW (L"BUTTON", L"打开", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                270, 94, 80, 30, hwnd, reinterpret_cast<HMENU> (2),
+            prompt->edit = ::CreateWindowExW (WS_EX_CLIENTEDGE, L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 24, 54, 512, 32, hwnd,
+                reinterpret_cast<HMENU> (1), ::GetModuleHandleW (nullptr), nullptr);
+            prompt->hint = ::CreateWindowW (L"STATIC",
+                L"支持 Bilibili 等网页。只有页面提供可访问的 HTML5 视频时，才能跟随谱面播放、暂停和跳转；登录可在视频小窗内完成。",
+                WS_CHILD | WS_VISIBLE | SS_LEFT, 24, 98, 620, 46, hwnd,
+                nullptr, ::GetModuleHandleW (nullptr), nullptr);
+            prompt->open = ::CreateWindowW (L"BUTTON", L"打开", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                330, 160, 104, 36, hwnd, reinterpret_cast<HMENU> (2),
                 ::GetModuleHandleW (nullptr), nullptr);
-            ::CreateWindowW (L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                362, 94, 80, 30, hwnd, reinterpret_cast<HMENU> (3),
+            prompt->cancel = ::CreateWindowW (L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                448, 160, 104, 36, hwnd, reinterpret_cast<HMENU> (3),
                 ::GetModuleHandleW (nullptr), nullptr);
             ::SetFocus (prompt->edit);
+            return 0;
+        }
+        case WM_SIZE:
+        {
+            const int width = LOWORD (lp);
+            const int height = HIWORD (lp);
+            const int margin = 24;
+            const int buttonWidth = 104;
+            const int buttonHeight = 36;
+            const int gap = 14;
+            const int buttonY = std::max (160, height - margin - buttonHeight);
+            if (prompt->label) ::SetWindowPos (prompt->label, nullptr, margin, 20,
+                std::max (1, width - margin * 2), 22, SWP_NOZORDER);
+            if (prompt->edit) ::SetWindowPos (prompt->edit, nullptr, margin, 54,
+                std::max (1, width - margin * 2), 32, SWP_NOZORDER);
+            if (prompt->hint) ::SetWindowPos (prompt->hint, nullptr, margin, 98,
+                std::max (1, width - margin * 2), 46, SWP_NOZORDER);
+            if (prompt->cancel) ::SetWindowPos (prompt->cancel, nullptr,
+                width - margin - buttonWidth, buttonY, buttonWidth, buttonHeight, SWP_NOZORDER);
+            if (prompt->open) ::SetWindowPos (prompt->open, nullptr,
+                width - margin - buttonWidth * 2 - gap, buttonY, buttonWidth, buttonHeight, SWP_NOZORDER);
+            return 0;
+        }
+        case WM_GETMINMAXINFO:
+        {
+            auto* info = reinterpret_cast<MINMAXINFO*> (lp);
+            RECT minimum { 0, 0, 660, 220 };
+            ::AdjustWindowRectEx (&minimum,
+                WS_CAPTION | WS_SYSMENU | WS_THICKFRAME, FALSE,
+                WS_EX_DLGMODALFRAME | WS_EX_TOPMOST);
+            info->ptMinTrackSize.x = minimum.right - minimum.left;
+            info->ptMinTrackSize.y = minimum.bottom - minimum.top;
             return 0;
         }
         case WM_COMMAND:
@@ -247,16 +289,23 @@ bool promptVideoUrl (HWND owner, std::wstring& value)
 
     RECT ownerRect {};
     ::GetWindowRect (owner, &ownerRect);
-    const int width = 460;
-    const int height = 156;
+    const DWORD style = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME;
+    const DWORD exStyle = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;
+    const int clientWidth = 760;
+    const int clientHeight = 240;
+    RECT frame { 0, 0, clientWidth, clientHeight };
+    ::AdjustWindowRectEx (&frame, style, FALSE, exStyle);
+    const int width = frame.right - frame.left;
+    const int height = frame.bottom - frame.top;
     const int ownerWidth = static_cast<int> (ownerRect.right - ownerRect.left);
     const int ownerHeight = static_cast<int> (ownerRect.bottom - ownerRect.top);
     const int x = static_cast<int> (ownerRect.left) + std::max (0, (ownerWidth - width) / 2);
     const int y = static_cast<int> (ownerRect.top) + std::max (0, (ownerHeight - height) / 2);
     VideoUrlPrompt prompt;
     prompt.value = &value;
-    prompt.window = ::CreateWindowExW (WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, kVideoUrlPromptClass,
-        L"打开网络视频", WS_CAPTION | WS_SYSMENU, x, y, width, height,
+    prompt.window = ::CreateWindowExW (exStyle, kVideoUrlPromptClass,
+        L"打开网络视频", style,
+        x, y, width, height,
         owner, nullptr, wc.hInstance, &prompt);
     if (!prompt.window) return false;
 
@@ -580,6 +629,7 @@ private:
     /// 把视野挪到 sec（播放头落在画面 25% 处）。用于「回到播放头」。
     void centerViewOn (double sec);
     void clampView ();
+    void syncVideoToTimeline (bool force);
     void afterLoad ();
     /// ⭐ 视图重建后把后端里存的视野读回来（见实现处的说明）
     void restoreViewState ();
@@ -617,7 +667,7 @@ private:
     bool m_tsPopupHasChange = false;
     std::vector<TsPopupBtn> m_tsPopupBtns;   ///< 按钮矩形（绘制与命中测试共用同一份）
     RECT m_tsPopupBox = { 0, 0, 0, 0 };      ///< 弹层面板矩形
-    HWND m_openBtn = nullptr, m_zoomOut = nullptr, m_zoomIn = nullptr, m_zoomFit = nullptr;
+    HWND m_openBtn = nullptr, m_videoBtn = nullptr, m_zoomOut = nullptr, m_zoomIn = nullptr, m_zoomFit = nullptr;
     std::vector<HWND> m_spaceSyncControls;
     HWND m_backBtn = nullptr, m_helpBtn = nullptr, m_gridCheck = nullptr, m_numCheck = nullptr;
     HWND m_bpmEdit = nullptr, m_bpmUp = nullptr, m_bpmDown = nullptr;
@@ -677,6 +727,13 @@ private:
     DWORD m_lastBackTick = 0;          ///< 上次点「回到播放头」的时刻（毫秒）
     bool  m_followFail = false;        ///< 是否处于「点了按钮仍错位」状态
     DWORD m_followFailLoggedTick = 0;  ///< 上次为此写日志的时刻（做冷却）
+
+    //---- 视频跟随 MuseScore 谱面时间轴 ----
+    DWORD m_lastVideoSyncTick = 0;
+    double m_lastVideoSyncSec = -1.0;
+    double m_lastVideoOffsetSec = 0.0;
+    bool m_lastVideoPlaying = false;
+    bool m_videoSyncInitialized = false;
 
     //---- 高 DPI ----
     double m_scale = 1.0;             ///< DPI 缩放系数（1.0 = 96 DPI）
@@ -851,7 +908,7 @@ void WinView::deleteFonts ()
 
 void WinView::applyFontsToChildren ()
 {
-    const HWND normal[] = { m_openBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn, m_expandBtn,
+    const HWND normal[] = { m_openBtn, m_videoBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn, m_expandBtn,
                             m_helpBtn, m_updateCheck, m_updateAction, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
                             m_gridCheck, m_numCheck, m_bpmEdit, m_bpmUp, m_bpmDown,
                             m_timesig, m_volSlider, m_progressSlider, m_offsetZero, m_offsetEdit, m_offsetDown, m_offsetUp,
@@ -961,6 +1018,7 @@ bool WinView::create (HWND parent, int w, int h)
         ::SetWindowLongPtrW (m_wave, GWLP_USERDATA, reinterpret_cast<LONG_PTR> (this));
 
     m_openBtn   = mk (L"BUTTON", L"打开音频", BS_PUSHBUTTON, IDC_OPEN);
+    m_videoBtn  = mk (L"BUTTON", L"打开视频", BS_PUSHBUTTON, IDC_OPEN_VIDEO);
     m_scoreBtn = mk (L"BUTTON", L"当前谱面", BS_PUSHBUTTON, IDC_LINK_SCORE);
     m_themeBtn = mk (L"BUTTON", L"", BS_PUSHBUTTON, IDC_THEME_BTN);
     m_followScoreCheck = mk (L"BUTTON", L"跟随谱面", BS_PUSHBUTTON, IDC_FOLLOW_SCORE);
@@ -1039,6 +1097,7 @@ bool WinView::create (HWND parent, int w, int h)
         ::SendMessageW (m_tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM> (&tool));
     };
     tip (m_helpBtn, L"使用指南与更新");
+    tip (m_videoBtn, L"打开本地视频或网络视频（支持 Bilibili 等网页）");
     tip (m_updateCheck, L"检查 GitHub 正式发布的新版本");
     tip (m_updateAction, L"在插件内下载，校验后打开安装器；下载中可取消");
     tip (m_collapseBtn, L"收起为悬浮条（音频继续同步）");
@@ -1070,7 +1129,7 @@ bool WinView::create (HWND parent, int w, int h)
     // 键盘焦点通常落在某个子控件上。给这些控件挂同一个轻量子类，保证
     // 编辑框、按钮、滑块和标签获得焦点时按空格仍能同步宿主播放/暂停。
     m_spaceSyncControls = {
-        m_openBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
+        m_openBtn, m_videoBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
         m_helpBtn, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
         m_gridCheck, m_numCheck, m_bpmEdit, m_bpmUp, m_bpmDown, m_timesig,
         m_volSlider, m_progressSlider, m_offsetZero, m_offsetEdit, m_offsetDown, m_offsetUp, m_semitoneEdit, m_semitoneUp,
@@ -1233,6 +1292,7 @@ void WinView::layoutChildren ()
     m_waveH = px (l.wave.h);
     move (m_wave, l.wave);
     move (m_openBtn, l.open);
+    move (m_videoBtn, l.video);
     move (m_scoreBtn, l.score);
     move (m_themeBtn, l.theme);
     move (m_followScoreCheck, l.followScore);
@@ -1439,18 +1499,19 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
                          dis->CtlID == IDC_OFFSET_UP || dis->CtlID == IDC_OFFSET_DOWN;
     if (stepper) fill = edge = kSurface;
 
-    if (dis->CtlID == IDC_OPEN)
+    const bool primaryOpen = dis->CtlID == IDC_OPEN || dis->CtlID == IDC_OPEN_VIDEO;
+    if (primaryOpen)
     {
         fill = edge = kInk;
         text = kSurface;
     }
     if (hot)
     {
-        fill = edge = dis->CtlID == IDC_OPEN ? kMuted : kAccentSoft;
+        fill = edge = primaryOpen ? kMuted : kAccentSoft;
     }
     if (pressed)
     {
-        fill = edge = dis->CtlID == IDC_OPEN ? kMuted : kSoftRule;
+        fill = edge = primaryOpen ? kMuted : kSoftRule;
     }
 
     RECT r = dis->rcItem;
@@ -1512,7 +1573,7 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
     if (dis->CtlID == IDC_HELP_BTN && (m_updateStatus.phase == updates::Phase::available ||
         m_updateStatus.phase == updates::Phase::ready))
     {
-        HBRUSH dot = ::CreateSolidBrush (kAccent);
+        HBRUSH dot = ::CreateSolidBrush (kUpdateAlert);
         RECT badge {r.right - px (8), r.top + px (3), r.right - px (3), r.top + px (8)};
         HGDIOBJ oldBrush = ::SelectObject (dis->hDC, dot);
         HGDIOBJ oldPen = ::SelectObject (dis->hDC, ::GetStockObject (NULL_PEN));
@@ -1990,7 +2051,7 @@ void WinView::setHelp (bool on)
 void WinView::showControls (bool show)
 {
     const HWND all[] = {
-        m_wave, m_openBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
+        m_wave, m_openBtn, m_videoBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
         m_helpBtn, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
         m_gridCheck, m_numCheck, m_bpmEdit, m_bpmUp, m_bpmDown, m_timesig,
         m_volSlider, m_progressSlider, m_offsetZero, m_offsetEdit, m_offsetDown, m_offsetUp, m_semitoneEdit, m_semitoneUp, m_semitoneDown,
@@ -2005,7 +2066,7 @@ void WinView::paintHelp (HDC dc)
 {
     struct Section { const wchar_t* title; const wchar_t* body; };
     static const Section guide[] = {
-        {L"载入音频", L"打开或拖入 MP3 / WAV / M4A / AAC / FLAC / OGG。\n空格键同步谱面与音频的播放、暂停。"},
+        {L"载入音频与视频", L"打开或拖入 MP3 / WAV / M4A / AAC / FLAC / OGG。\n点击「打开视频」可载入 MP4 / WebM / M4V，或输入网络视频网址（支持 Bilibili 页面）。\n视频窗口需要 Microsoft Edge WebView2 Runtime。"},
         {L"连接谱面", L"运行 MuseSync Bridge，确认开启提示。速度、拍号随谱面变化；切换谱面后刷新。\n关闭「跟随谱面」可手动设置，顶部拍号块可换拍。"},
         {L"对齐第一拍", L"Ctrl / Alt + 拖动网格，对齐第 1 小节与音乐第一拍；加按 Shift 微调。\n起始偏移可输入毫秒，回转箭头清零。"},
         {L"移调与音量", L"半音 ±24，音分 ±100，可叠加且不改变时长。\n回转箭头恢复原音，滑条调整音量。"},
@@ -2766,6 +2827,7 @@ void WinView::onTimer ()
     }
 
     const PlugView::Backend::HostTimeline tl = m_backend->hostTimeline ();
+    syncVideoToTimeline (false);
     const double audioNow = m_backend->positionSec ();
     const double durNow   = m_backend->durationSec ();
     const double offNow   = static_cast<double> (m_backend->offsetSec ());
@@ -2865,6 +2927,39 @@ void WinView::onTimer ()
         m_pushedViewSpan  = m_viewSpan;
         m_backend->setViewState (m_viewStart, m_viewSpan);
     }
+}
+
+void WinView::syncVideoToTimeline (bool force)
+{
+    if (!m_videoView || !m_backend) return;
+    const auto timeline = m_backend->hostTimeline ();
+    if (!timeline.playheadValid) return;
+
+    const double offset = static_cast<double> (m_backend->offsetSec ());
+    const double videoSeconds = timeline.playheadSec + offset;
+    const DWORD now = ::GetTickCount ();
+    const bool initialized = m_videoSyncInitialized;
+    const bool offsetChanged = initialized && std::fabs (offset - m_lastVideoOffsetSec) > 1e-4;
+    const double elapsed = initialized ?
+        std::max (0.0, static_cast<double> (now - m_lastVideoSyncTick) * 0.001) : 0.0;
+    const double delta = initialized ? videoSeconds - m_lastVideoSyncSec : 0.0;
+    // A fixed delta threshold mistakes sparse host updates or faster playback
+    // for seeks, which resets the video's tempo estimate to 1x. Scale the
+    // forward allowance to elapsed wall time; backward motion is always a seek.
+    const double expectedAdvance = std::min (elapsed, 1.5) * 4.0 + 0.15;
+    const bool timelineJump = initialized &&
+        (timeline.playing && m_lastVideoPlaying ?
+            (delta < -0.05 || delta > expectedAdvance) : std::fabs (delta) > 0.01);
+    const bool jumped = !initialized || offsetChanged || timelineJump;
+    const bool stateChanged = !initialized || timeline.playing != m_lastVideoPlaying;
+    if (!force && !jumped && !stateChanged && now - m_lastVideoSyncTick < 100) return;
+
+    m_videoView->sync (videoSeconds, timeline.playing, force || jumped);
+    m_lastVideoSyncTick = now;
+    m_lastVideoSyncSec = videoSeconds;
+    m_lastVideoOffsetSec = offset;
+    m_lastVideoPlaying = timeline.playing;
+    m_videoSyncInitialized = true;
 }
 
 void WinView::refreshLabels ()
@@ -3168,6 +3263,7 @@ void WinView::onDropFiles (HDROP drop)
                         ::MessageBoxW (m_hwnd,
                             L"无法打开此视频。请确认文件存在、格式受支持，并已安装 Microsoft Edge WebView2 Runtime。",
                             L"MuseSync 视频", MB_OK | MB_ICONERROR);
+                    else syncVideoToTimeline (true);
                 }
                 else if (m_backend)
                 {
@@ -3215,6 +3311,7 @@ void WinView::openVideoFileDialog ()
             ::MessageBoxW (m_hwnd,
                 L"无法打开此视频。请确认文件存在、格式受支持，并已安装 Microsoft Edge WebView2 Runtime。",
                 L"MuseSync 视频", MB_OK | MB_ICONERROR);
+        else syncVideoToTimeline (true);
     }
 }
 
@@ -3228,6 +3325,7 @@ void WinView::openVideoUrlDialog ()
             L"无法启动视频播放器。请检查网址是否以 http:// 或 https:// 开头，并确认已安装 Microsoft Edge WebView2 Runtime。\n\n"
             L"部分网站的视频可能需要登录，或受到地区、嵌入策略及版权限制。",
             L"MuseSync 视频", MB_OK | MB_ICONERROR);
+    else syncVideoToTimeline (true);
 }
 
 void WinView::applyBpmFromEdit ()
@@ -3752,6 +3850,22 @@ void WinView::onCommand (int id, int notify)
             ::DestroyMenu (menu);
             if (choice == IDC_OPEN) openFileDialog ();
             else if (choice == IDC_OPEN_VIDEO_LOCAL) openVideoFileDialog ();
+            else if (choice == IDC_OPEN_VIDEO_URL) openVideoUrlDialog ();
+            break;
+        }
+        case IDC_OPEN_VIDEO:
+        {
+            HMENU menu = ::CreatePopupMenu ();
+            if (!menu) { openVideoFileDialog (); break; }
+            ::AppendMenuW (menu, MF_STRING, IDC_OPEN_VIDEO_LOCAL, L"打开本地视频...");
+            ::AppendMenuW (menu, MF_STRING, IDC_OPEN_VIDEO_URL, L"打开网络视频...");
+            RECT rc {};
+            ::GetWindowRect (m_videoBtn, &rc);
+            const int choice = static_cast<int> (::TrackPopupMenu (menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_TOPALIGN, rc.left, rc.bottom,
+                0, m_hwnd, nullptr));
+            ::DestroyMenu (menu);
+            if (choice == IDC_OPEN_VIDEO_LOCAL) openVideoFileDialog ();
             else if (choice == IDC_OPEN_VIDEO_URL) openVideoUrlDialog ();
             break;
         }

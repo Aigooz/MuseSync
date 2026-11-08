@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.1 - 2026-11-08
+
+- Synchronize accessible video players with score playback, seeking and playback speed.
+- Improve video URL entry and update download handling for slow connections.
+- Video synchronization depends on the website player and has not been verified across all sites and hosts.
+
 ## 2.4.0 - 2026-11-08
 
 Windows x64 release, with MuseSync Bridge 1.4.0.

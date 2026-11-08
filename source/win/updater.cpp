@@ -60,11 +60,11 @@ struct Request
         }
         catch (...) { close (); throw; }
     }
-    void wait (BOOL started, const std::atomic<bool>& cancel)
+    void wait (BOOL started, const std::atomic<bool>& cancel, bool bounded = true)
     {
         if (!started && GetLastError () != ERROR_IO_PENDING) throw std::runtime_error ("network start");
         const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30);
-        while (!cancel && std::chrono::steady_clock::now () < deadline)
+        while (!cancel && (!bounded || std::chrono::steady_clock::now () < deadline))
         {
             const auto result = WaitForSingleObject (completed, 50);
             if (result == WAIT_OBJECT_0)
@@ -75,7 +75,7 @@ struct Request
             if (result != WAIT_TIMEOUT) throw std::runtime_error ("network wait");
         }
         SetLastError (cancel ? ERROR_CANCELLED : ERROR_TIMEOUT);
-        throw std::runtime_error ("network cancelled or timed out");
+        throw std::runtime_error (cancel ? "network cancelled" : "network timed out");
     }
     void close ()
     {
@@ -167,7 +167,8 @@ void httpsGet (const std::wstring& initial, const Sink& sink, const std::atomic<
         proxy.fAutoDetect || proxy.lpszAutoConfigUrl ? WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY : WINHTTP_ACCESS_TYPE_NO_PROXY;
     Internet session (WinHttpOpen (L"MuseSync-Updater/1", access,
                                    proxy.lpszProxy, proxy.lpszProxyBypass, WINHTTP_FLAG_ASYNC));
-    WinHttpSetTimeouts (session.value, 5000, 10000, 10000, 10000);
+    // Keep setup and response-header waits bounded; let slow response bodies finish.
+    WinHttpSetTimeouts (session.value, 5000, 10000, 10000, 0);
     std::wstring url = initial;
     for (int redirect = 0; redirect <= 5; ++redirect)
     {
@@ -208,7 +209,7 @@ void httpsGet (const std::wstring& initial, const Sink& sink, const std::atomic<
         if (!sink (nullptr, 0, length)) throw std::runtime_error ("response rejected");
         while (!cancel)
         {
-            request.wait (WinHttpReadData (request.value, buffer.data (), static_cast<DWORD> (buffer.size ()), nullptr), cancel);
+            request.wait (WinHttpReadData (request.value, buffer.data (), static_cast<DWORD> (buffer.size ()), nullptr), cancel, false);
             const DWORD read = request.received;
             if (!read) return;
             if (!sink (buffer.data (), read, length)) throw std::runtime_error ("response rejected");

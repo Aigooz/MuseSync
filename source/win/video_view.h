@@ -15,6 +15,7 @@ public:
 
     bool openLocal (const std::wstring& path);
     bool openUrl (const std::wstring& url);
+    void sync (double seconds, bool playing, bool discontinuity = false);
     void close ();
 
 private:

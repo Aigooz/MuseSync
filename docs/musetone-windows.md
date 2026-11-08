@@ -53,7 +53,7 @@ MuseScore 3 不支持 VST3，因此不支持本插件。4.0–4.5 已增加旧�
 
 ## 功能
 
-Windows 版可从插件“打开”菜单载入 MP4、WebM、M4V 本地视频，或输入 http/https 视频网页地址，在独立窗口中与乐谱并排对照。网页能否播放取决于网站策略和其播放器；Bilibili 等需要登录的网站，WebView2 使用独立浏览器配置，可能需要在窗口内单独登录。播放器需要 Microsoft Edge WebView2 Runtime；此功能不下载网络视频。音频伴奏仍通过原有音频入口载入。
+Windows 版可从插件“打开”菜单载入 MP4、WebM、M4V 本地视频，或输入 http/https 视频网页地址。视频在独立、可调整大小的窗口播放，并跟随 MuseScore 谱面播放头：播放、暂停、谱面跳转和插件进度条跳转都会同步；谱面速度变化也会按谱面时间轴校正视频位置。网页播放器只有在页面提供可访问的 HTML5 `<video>` 时才能被同步控制；Bilibili 等网站还可能受登录、iframe、地区、版权或网站策略限制。WebView2 使用独立浏览器配置，可能需要在视频窗口内单独登录。播放器需要 Microsoft Edge WebView2 Runtime；此功能不下载网络视频。音频伴奏仍通过原有音频入口载入。
 
 MuseSync 是 Windows VST3 插件，保留音频载入、波形、拍号网格、偏移和宿主时间轴同步，并增加：
 

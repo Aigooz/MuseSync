@@ -20,7 +20,7 @@ struct Layout
 {
     int width, height, parametersY;
     Rect file, transport, time, progress, musicalPosition, wave;
-    Rect open, score, theme, help, collapse, followScore, grid, numbers, zoomOut, zoomIn, zoomFit, follow;
+    Rect open, video, score, theme, help, collapse, followScore, grid, numbers, zoomOut, zoomIn, zoomFit, follow;
     Rect sync, pitch, volume;
     Rect syncTitle, pitchTitle, bpmLabel, bpmSource, timeSigLabel, offsetLabel;
     Rect semitoneLabel, centsLabel, volumeLabel;
@@ -59,13 +59,14 @@ inline Layout arrange (int width, int height)
     l.height = std::max (minHeight, height);
     l.parametersY = l.height - 164;
 
-    l.file = {160, 12, l.width - 516, 23};
+    l.file = {160, 12, l.width - 530, 23};
     l.transport = {160, 37, l.file.w, 18};
-    l.score = {l.width - 340, 16, 96, 32};
-    l.open = {l.width - 236, 16, 96, 32};
-    l.theme = {l.width - 132, 16, 32, 32};
-    l.help = {l.width - 92, 16, 32, 32};
-    l.collapse = {l.width - 52, 16, 32, 32};
+    l.score = {l.width - 370, 16, 78, 32};
+    l.open = {l.width - 284, 16, 78, 32};
+    l.video = {l.width - 198, 16, 78, 32};
+    l.theme = {l.width - 112, 16, 28, 32};
+    l.help = {l.width - 76, 16, 28, 32};
+    l.collapse = {l.width - 40, 16, 28, 32};
     l.time = {20, 68, 120, 24};
     const int toolsX = l.width - 350;
     l.progress = {144, 66, toolsX - 240, 28};
