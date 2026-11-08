@@ -18,19 +18,19 @@ MuseSync 把伴奏放进 MuseScore 4：载入音频，对齐第一拍，再跟�
 
 ## 下载
 
-目前发布的是 **MuseSync 2.3.0**，搭配 **MuseSync Bridge 1.4.0**。
+目前发布的是 **MuseSync 2.4.0**，搭配 **MuseSync Bridge 1.4.0**。
 
 打开 [Releases 发布页](https://github.com/Aigooz/MuseSync/releases/latest)，下载：
 
 ```text
-MuseSync-Setup-2.3.0-Windows-x64.exe
+MuseSync-Setup-2.4.0-Windows-x64.exe
 ```
 
 **自己用，或者发给别人用，都只需要这个 EXE。** VST3、Bridge 和安装说明已经在里面，不用再找源码、SDK 或 ZIP。不过，它安装的是插件，不能单独当播放器用，电脑上还是要有 MuseScore 4。
 
 Windows ZIP 留给需要手动部署的人，Source ZIP 是源码。要核对下载文件，可以用同一发布页里的 `SHA256SUMS.txt`。
 
-2.3.0 已包含中文安装向导、插件内检查和下载更新、一键卸载，以及旧版 4.x 接口兼容改动。[查看这次更新](docs/RELEASE-2.3.0.md)。
+2.4.0 增加本地视频与网络视频网页对照播放；也包含中文安装向导、插件内检查和下载更新及一键卸载。[查看这次更新](docs/RELEASE-2.4.0.md)。
 
 ## 可以做什么
 

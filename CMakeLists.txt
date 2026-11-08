@@ -28,13 +28,18 @@
 cmake_minimum_required(VERSION 3.20)
 
 # Keep the build target and bundle path stable for existing host references.
-project(MuseTone VERSION 2.3.0 LANGUAGES C CXX)
+project(MuseTone VERSION 2.4.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(MUSETONE_BUILD_TESTS "Build the focused MuseTone regression tests" OFF)
+
+# 可选的 Windows 视频播放器依赖。未提供 SDK 时仍保留无功能降级实现，
+# 这样普通构建不会因为本机没有 WebView2 SDK 而失败。
+set(WEBVIEW2_SDK_DIR "" CACHE PATH
+    "WebView2 SDK 根目录（含 build/native/include/WebView2.h）")
 
 # 单配置生成器（Unix Makefiles / Ninja）必须显式给 CMAKE_BUILD_TYPE，
 # 否则 SDK 的 fdebug.h 会因为 RELEASE / _DEBUG / NDEBUG 一个都没定义而 #error。
@@ -119,6 +124,7 @@ elseif(WIN32)
         "${VST3_SDK_DIR}/vstgui4/vstgui/thirdparty/miniz/miniz.c"
         source/win/audiofile_win.cpp   # 解码（Media Foundation）
         source/win/crashguard_win.cpp  # 崩溃取证（SEH + DbgHelp）
+        source/win/video_view.cpp      # 本地/网络视频对照窗口（WebView2）
         source/win/gui_win.cpp)        # 界面（Win32）
 elseif(UNIX)
     # Linux：界面走 X11 + Xft；解码用 vendored dr_libs（插件自带编解码器，用户零依赖）
@@ -161,6 +167,26 @@ target_include_directories(MuseTone PRIVATE
     # 源码里用 "public.sdk/..." / "pluginterfaces/..." 全路径形式包含 SDK 头，
     # 所以要把 SDK 根目录加进 include 路径（与 build.sh 的 -I$SDK 对应）
     "${VST3_SDK_DIR}")
+
+if(WIN32 AND WEBVIEW2_SDK_DIR)
+    set(_WEBVIEW2_INCLUDE "${WEBVIEW2_SDK_DIR}/build/native/include")
+    set(_WEBVIEW2_LIB "")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(_WEBVIEW2_LIB "${WEBVIEW2_SDK_DIR}/build/native/x64/WebView2LoaderStatic.lib")
+    elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set(_WEBVIEW2_LIB "${WEBVIEW2_SDK_DIR}/build/native/x86/WebView2LoaderStatic.lib")
+    endif()
+
+    if(EXISTS "${_WEBVIEW2_INCLUDE}/WebView2.h" AND EXISTS "${_WEBVIEW2_LIB}")
+        target_include_directories(MuseTone PRIVATE "${_WEBVIEW2_INCLUDE}")
+        target_compile_definitions(MuseTone PRIVATE MUSESYNC_HAS_WEBVIEW2=1)
+        target_link_libraries(MuseTone PRIVATE "${_WEBVIEW2_LIB}")
+        message(STATUS "启用 WebView2 视频播放器：${_WEBVIEW2_LIB}")
+    else()
+        message(WARNING
+            "WEBVIEW2_SDK_DIR 无效，视频播放器将使用降级实现：${WEBVIEW2_SDK_DIR}")
+    endif()
+endif()
 
 target_compile_definitions(MuseTone PRIVATE MUSETONE_VERSION="${PROJECT_VERSION}")
 
@@ -254,6 +280,11 @@ if(MUSETONE_BUILD_TESTS)
             sdk sdk_hosting sdk_common pluginterfaces base
             mfplat mfreadwrite mfuuid dbghelp ole32 oleaut32 uuid
             user32 gdi32 comctl32 comdlg32 shell32 xmllite shlwapi winhttp bcrypt)
+        if(WEBVIEW2_SDK_DIR AND EXISTS "${_WEBVIEW2_INCLUDE}/WebView2.h" AND EXISTS "${_WEBVIEW2_LIB}")
+            target_include_directories(musetone_sync_test PRIVATE "${_WEBVIEW2_INCLUDE}")
+            target_compile_definitions(musetone_sync_test PRIVATE MUSESYNC_HAS_WEBVIEW2=1)
+            target_link_libraries(musetone_sync_test PRIVATE "${_WEBVIEW2_LIB}")
+        endif()
         add_test(NAME musetone_sync_test COMMAND musetone_sync_test)
         add_executable(musesync_updater_test tests/updater_test.cpp source/win/updater.cpp)
         target_include_directories(musesync_updater_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source")

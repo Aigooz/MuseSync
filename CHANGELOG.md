@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.0 - 2026-11-08
+
+Windows x64 release, with MuseSync Bridge 1.4.0.
+
+- Add a separate WebView2 video window for local MP4, WebM and M4V files and http/https video pages, including Bilibili pages where site policies permit playback.
+- Include the WebView2 SDK in Windows CI builds and document the WebView2 Runtime requirement.
+- Fix player-window shutdown while its UI thread is starting, and limit the file picker to formats handled by the player.
+
+The video window does not download online videos. Website login, regional availability, copyright restrictions and codec support may limit playback. MuseScore compatibility claims remain unchanged; automated validation does not replace host testing.
+
 ## 2.3.0 - 2026-11-02
 
 Windows x64 release, with MuseSync Bridge 1.4.0.

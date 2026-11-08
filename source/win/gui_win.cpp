@@ -18,6 +18,7 @@
 #include "ui_theme.h"
 #include "scorebridge.h"
 #include "updater.h"
+#include "video_view.h"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -31,6 +32,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <memory>
 #include <string>
 #include <stdexcept>
 #include <vector>
@@ -161,12 +163,119 @@ enum : int
     IDC_PROGRESS_SLIDER,
     IDC_UPDATE_CHECK,
     IDC_UPDATE_ACTION,
+    IDC_OPEN_VIDEO_LOCAL = 1401,
+    IDC_OPEN_VIDEO_URL,
     IDC_TIMER_UI = 1200
 };
 
 const wchar_t* kMainClass = L"MuseToneMainView";
 const wchar_t* kWaveClass = L"MuseToneWaveView";
 const wchar_t* kFloatingClass = L"MuseToneFloatingView";
+
+struct VideoUrlPrompt
+{
+    HWND window = nullptr;
+    HWND edit = nullptr;
+    std::wstring* value = nullptr;
+    bool accepted = false;
+};
+
+constexpr wchar_t kVideoUrlPromptClass[] = L"MuseSyncVideoUrlPrompt";
+
+LRESULT CALLBACK videoUrlPromptProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    auto* prompt = reinterpret_cast<VideoUrlPrompt*> (::GetWindowLongPtrW (hwnd, GWLP_USERDATA));
+    if (msg == WM_NCCREATE)
+    {
+        auto* create = reinterpret_cast<CREATESTRUCTW*> (lp);
+        prompt = static_cast<VideoUrlPrompt*> (create->lpCreateParams);
+        ::SetWindowLongPtrW (hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR> (prompt));
+    }
+    if (!prompt) return ::DefWindowProcW (hwnd, msg, wp, lp);
+    switch (msg)
+    {
+        case WM_CREATE:
+        {
+            prompt->edit = ::CreateWindowExW (WS_EX_CLIENTEDGE, L"EDIT", L"https://www.bilibili.com/",
+                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL, 18, 48, 424, 28, hwnd,
+                reinterpret_cast<HMENU> (1), ::GetModuleHandleW (nullptr), nullptr);
+            ::CreateWindowW (L"STATIC", L"输入视频网址（支持 Bilibili 等 http/https 页面）",
+                WS_CHILD | WS_VISIBLE, 18, 18, 424, 22, hwnd,
+                nullptr, ::GetModuleHandleW (nullptr), nullptr);
+            ::CreateWindowW (L"BUTTON", L"打开", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                270, 94, 80, 30, hwnd, reinterpret_cast<HMENU> (2),
+                ::GetModuleHandleW (nullptr), nullptr);
+            ::CreateWindowW (L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                362, 94, 80, 30, hwnd, reinterpret_cast<HMENU> (3),
+                ::GetModuleHandleW (nullptr), nullptr);
+            ::SetFocus (prompt->edit);
+            return 0;
+        }
+        case WM_COMMAND:
+            if (LOWORD (wp) == 2)
+            {
+                wchar_t text[2048] = {};
+                ::GetWindowTextW (prompt->edit, text, 2048);
+                prompt->accepted = text[0] != L'\0';
+                if (prompt->accepted) *prompt->value = text;
+                ::DestroyWindow (hwnd);
+                return 0;
+            }
+            if (LOWORD (wp) == 3)
+            {
+                ::DestroyWindow (hwnd);
+                return 0;
+            }
+            break;
+        case WM_CLOSE:
+            ::DestroyWindow (hwnd);
+            return 0;
+    }
+    return ::DefWindowProcW (hwnd, msg, wp, lp);
+}
+
+bool promptVideoUrl (HWND owner, std::wstring& value)
+{
+    WNDCLASSEXW wc {};
+    wc.cbSize = sizeof wc;
+    wc.lpfnWndProc = videoUrlPromptProc;
+    wc.hInstance = ::GetModuleHandleW (nullptr);
+    wc.hCursor = ::LoadCursorW (nullptr, IDC_ARROW);
+    wc.hbrBackground = reinterpret_cast<HBRUSH> (COLOR_WINDOW + 1);
+    wc.lpszClassName = kVideoUrlPromptClass;
+    ::RegisterClassExW (&wc);
+
+    RECT ownerRect {};
+    ::GetWindowRect (owner, &ownerRect);
+    const int width = 460;
+    const int height = 156;
+    const int ownerWidth = static_cast<int> (ownerRect.right - ownerRect.left);
+    const int ownerHeight = static_cast<int> (ownerRect.bottom - ownerRect.top);
+    const int x = static_cast<int> (ownerRect.left) + std::max (0, (ownerWidth - width) / 2);
+    const int y = static_cast<int> (ownerRect.top) + std::max (0, (ownerHeight - height) / 2);
+    VideoUrlPrompt prompt;
+    prompt.value = &value;
+    prompt.window = ::CreateWindowExW (WS_EX_DLGMODALFRAME | WS_EX_TOPMOST, kVideoUrlPromptClass,
+        L"打开网络视频", WS_CAPTION | WS_SYSMENU, x, y, width, height,
+        owner, nullptr, wc.hInstance, &prompt);
+    if (!prompt.window) return false;
+
+    ::EnableWindow (owner, FALSE);
+    ::ShowWindow (prompt.window, SW_SHOW);
+    ::UpdateWindow (prompt.window);
+    MSG msg {};
+    while (::IsWindow (prompt.window) && ::GetMessageW (&msg, nullptr, 0, 0) > 0)
+    {
+        if (!::IsDialogMessageW (prompt.window, &msg))
+        {
+            ::TranslateMessage (&msg);
+            ::DispatchMessageW (&msg);
+        }
+    }
+    ::EnableWindow (owner, TRUE);
+    ::SetForegroundWindow (owner);
+    return prompt.accepted;
+}
 
 // 拍号选项（与 macOS 端一致）
 struct TimeSig { const wchar_t* label; int beats; int denom; };
@@ -444,6 +553,8 @@ private:
     void refreshLabels ();
     void seekFromAudio (double audioSec);
     void openFileDialog ();
+    void openVideoFileDialog ();
+    void openVideoUrlDialog ();
     void syncCurrentScore (bool showStatus);
     void applyNumericEdit (int id);
     void showThemeMenu ();
@@ -528,6 +639,7 @@ private:
     std::wstring m_musicalText = L"--";
     std::wstring m_fileText, m_transportText, m_pitchText;
     std::string m_displayedPath;
+    std::unique_ptr<VideoView> m_videoView;
 
     HFONT m_font = nullptr, m_fontSmall = nullptr, m_fontBold = nullptr, m_fontIcons = nullptr;
     HFONT m_fontHeading = nullptr, m_fontMono = nullptr, m_fontPosition = nullptr;
@@ -996,6 +1108,11 @@ bool WinView::create (HWND parent, int w, int h)
 void WinView::destroy ()
 {
     m_updater.stop ();
+    if (m_videoView)
+    {
+        m_videoView->close ();
+        m_videoView.reset ();
+    }
     // Restore only a shell that this view hid; never leave a hidden host dialog.
     if (m_collapsed && m_shellWasVisible && ::IsWindow (m_editorShell))
         ::ShowWindow (m_editorShell, SW_SHOWNOACTIVATE);
@@ -3035,16 +3152,28 @@ void WinView::afterLoad ()
 
 void WinView::onDropFiles (HDROP drop)
 {
-    if (m_backend)
+    const UINT n = ::DragQueryFileW (drop, 0xFFFFFFFF, nullptr, 0);
+    if (n > 0)
     {
-        const UINT n = ::DragQueryFileW (drop, 0xFFFFFFFF, nullptr, 0);
-        if (n > 0)
+        const UINT length = ::DragQueryFileW (drop, 0, nullptr, 0);
+        if (length > 0)
         {
-            wchar_t path[MAX_PATH * 2] = {0};
-            if (::DragQueryFileW (drop, 0, path, MAX_PATH * 2) > 0)
+            std::vector<wchar_t> path (static_cast<size_t> (length) + 1);
+            if (::DragQueryFileW (drop, 0, path.data (), static_cast<UINT> (path.size ())) > 0)
             {
-                m_backend->loadFile (wideToUtf8 (path));
-                afterLoad ();
+                if (isVideoFile (path.data ()))
+                {
+                    if (!m_videoView) m_videoView = std::make_unique<VideoView> ();
+                    if (!m_videoView->openLocal (path.data ()))
+                        ::MessageBoxW (m_hwnd,
+                            L"无法打开此视频。请确认文件存在、格式受支持，并已安装 Microsoft Edge WebView2 Runtime。",
+                            L"MuseSync 视频", MB_OK | MB_ICONERROR);
+                }
+                else if (m_backend)
+                {
+                    m_backend->loadFile (wideToUtf8 (path.data ()));
+                    afterLoad ();
+                }
             }
         }
     }
@@ -3067,6 +3196,38 @@ void WinView::openFileDialog ()
         m_backend->loadFile (wideToUtf8 (path));
         afterLoad ();
     }
+}
+
+void WinView::openVideoFileDialog ()
+{
+    wchar_t path[MAX_PATH * 2] = {};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof ofn;
+    ofn.hwndOwner = m_hwnd;
+    ofn.lpstrFilter = L"支持的视频文件\0*.mp4;*.webm;*.m4v\0所有文件\0*.*\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH * 2;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (::GetOpenFileNameW (&ofn))
+    {
+        if (!m_videoView) m_videoView = std::make_unique<VideoView> ();
+        if (!m_videoView->openLocal (path))
+            ::MessageBoxW (m_hwnd,
+                L"无法打开此视频。请确认文件存在、格式受支持，并已安装 Microsoft Edge WebView2 Runtime。",
+                L"MuseSync 视频", MB_OK | MB_ICONERROR);
+    }
+}
+
+void WinView::openVideoUrlDialog ()
+{
+    std::wstring url;
+    if (!promptVideoUrl (m_hwnd, url)) return;
+    if (!m_videoView) m_videoView = std::make_unique<VideoView> ();
+    if (!m_videoView->openUrl (url))
+        ::MessageBoxW (m_hwnd,
+            L"无法启动视频播放器。请检查网址是否以 http:// 或 https:// 开头，并确认已安装 Microsoft Edge WebView2 Runtime。\n\n"
+            L"部分网站的视频可能需要登录，或受到地区、嵌入策略及版权限制。",
+            L"MuseSync 视频", MB_OK | MB_ICONERROR);
 }
 
 void WinView::applyBpmFromEdit ()
@@ -3576,7 +3737,29 @@ void WinView::onCommand (int id, int notify)
             updateAction ();
             break;
         case IDC_OPEN:
-            openFileDialog ();
+        {
+            HMENU menu = ::CreatePopupMenu ();
+            if (!menu) { openFileDialog (); break; }
+            ::AppendMenuW (menu, MF_STRING, IDC_OPEN, L"打开音频文件...");
+            ::AppendMenuW (menu, MF_SEPARATOR, 0, nullptr);
+            ::AppendMenuW (menu, MF_STRING, IDC_OPEN_VIDEO_LOCAL, L"打开本地视频...");
+            ::AppendMenuW (menu, MF_STRING, IDC_OPEN_VIDEO_URL, L"打开网络视频...");
+            RECT rc {};
+            ::GetWindowRect (m_openBtn, &rc);
+            const int choice = static_cast<int> (::TrackPopupMenu (menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_TOPALIGN, rc.left, rc.bottom,
+                0, m_hwnd, nullptr));
+            ::DestroyMenu (menu);
+            if (choice == IDC_OPEN) openFileDialog ();
+            else if (choice == IDC_OPEN_VIDEO_LOCAL) openVideoFileDialog ();
+            else if (choice == IDC_OPEN_VIDEO_URL) openVideoUrlDialog ();
+            break;
+        }
+        case IDC_OPEN_VIDEO_LOCAL:
+            openVideoFileDialog ();
+            break;
+        case IDC_OPEN_VIDEO_URL:
+            openVideoUrlDialog ();
             break;
         case IDC_LINK_SCORE:
             syncCurrentScore (true);

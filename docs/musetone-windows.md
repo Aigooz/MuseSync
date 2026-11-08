@@ -1,6 +1,6 @@
 # MuseSync 谱伴同步 for Windows
 
-当前发布版：**2.3.0**，同步组件：**MuseSync Bridge 1.4.0**。
+当前发布版：**2.4.0**，同步组件：**MuseSync Bridge 1.4.0**。
 
 原名 MuseTone。从 2.3.0 起，VST3 文件夹和内部模块已统一为 `MuseSync.vst3`。
 VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保持不变。
@@ -8,9 +8,9 @@ VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保�
 
 ## 下载与启用
 
-普通用户下载 `MuseSync-Setup-2.3.0-Windows-x64.exe`，核对同一发布页的
+普通用户下载 `MuseSync-Setup-2.4.0-Windows-x64.exe`，核对同一发布页的
 `SHA256SUMS.txt` 后安装。此 EXE 是安装器，不是独立播放器。
-需要 Windows 10/11 x64 和官方 MuseScore 4 安装版；安装前保存谱面并退出 MuseScore。分发时只需发送 EXE，对方无需源码或 ZIP，但仍需安装宿主并启用插件。
+需要 Windows 10/11 x64、官方 MuseScore 4 安装版，以及 Microsoft Edge WebView2 Runtime；安装前保存谱面并退出 MuseScore。分发时只需发送 EXE，对方无需源码或 ZIP，但仍需安装宿主并启用插件。Windows 11 通常已预装 WebView2 Runtime；若视频窗口提示缺少运行时，请从微软官方渠道安装 Evergreen WebView2 Runtime。
 
 MuseScore 3 不支持 VST3，因此不支持本插件。4.0–4.5 已增加旧版 Qt 5 设置读写、数值型时间接口及多声部速度扫描兼容；4.6–4.7 保留新版分段路径。两套接口均有回归测试，但尚未逐个版本实机验证，不能保证所有 4.x 构建。旧版在音符之间的速度标记、渐变速度、反复和播放倍率方面仍可能偏移，推荐较新的官方 4.x。多个 4.x 共存时，Bridge 只安装到向导所选版本，换用其他版本需重新选择目录安装。
 
@@ -53,7 +53,9 @@ MuseScore 3 不支持 VST3，因此不支持本插件。4.0–4.5 已增加旧�
 
 ## 功能
 
-MuseSync 是基于原 `DaweiDrumScore` 源码重做的 Windows VST3 插件，保留音频载入、波形、拍号网格、偏移和宿主时间轴同步，并增加：
+Windows 版可从插件“打开”菜单载入 MP4、WebM、M4V 本地视频，或输入 http/https 视频网页地址，在独立窗口中与乐谱并排对照。网页能否播放取决于网站策略和其播放器；Bilibili 等需要登录的网站，WebView2 使用独立浏览器配置，可能需要在窗口内单独登录。播放器需要 Microsoft Edge WebView2 Runtime；此功能不下载网络视频。音频伴奏仍通过原有音频入口载入。
+
+MuseSync 是 Windows VST3 插件，保留音频载入、波形、拍号网格、偏移和宿主时间轴同步，并增加：
 
 - 半音：`-24` 到 `+24`，用于整曲移调。
 - 音分：`-100` 到 `+100`，用于细微校音。
