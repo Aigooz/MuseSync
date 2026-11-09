@@ -15,6 +15,7 @@
 #include <atomic>
 #include <algorithm>
 #include <mutex>
+#include <functional>
 
 namespace ap {
 
@@ -362,6 +363,10 @@ private:
 // 单独放在 .cpp 里，避免把 ObjC 头文件污染纯 C++ 头。
 //------------------------------------------------------------------------------
 bool decodeAudioFile(const std::string& path, AudioData& out, std::string& err);
+#ifdef _WIN32
+bool decodeAudioFileCancellable (const std::string& path, AudioData& out, std::string& err,
+                                const std::function<bool ()>& cancelled);
+#endif
 
 //------------------------------------------------------------------------------
 // 支持的扩展名（GUI 用）

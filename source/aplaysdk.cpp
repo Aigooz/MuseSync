@@ -7,6 +7,7 @@
 #include "hostcompat.h"
 #include "scoreinfo.h"
 #include "ui_theme.h"
+#include "video_audio.h"
 
 #include "public.sdk/source/main/pluginfactory.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
@@ -37,7 +38,7 @@ using namespace Steinberg::Vst;
 static constexpr uint32 kAPlayDistributable = 1 << 0;
 
 #ifndef MUSETONE_VERSION
-#define MUSETONE_VERSION "2.4.0"
+#define MUSETONE_VERSION "2.5.1"
 #endif
 #define APLAY_VERSION_WSTR STR16 (MUSETONE_VERSION)
 
@@ -86,6 +87,16 @@ APlayProcessor* currentProcessor ()
 class StableBackend final : public ap::PlugView::Backend
 {
 public:
+    std::shared_ptr<ap::TempoAnalyzer> tempoAnalyzer () const override
+    {
+        if (auto* p = currentProcessor ()) return p->tempoAnalyzer ();
+        return {};
+    }
+    void setVideoAudio (std::shared_ptr<ap::VideoAudioStream> stream) override
+    {
+        if (auto* p = currentProcessor ()) p->setVideoAudio (std::move (stream));
+    }
+
     bool loadFile (const std::string& path) override
     {
         APlayProcessor* p = currentProcessor ();
@@ -290,7 +301,7 @@ public:
     int theme () const override
     {
         auto* p = currentProcessor ();
-        return p ? p->theme () : 0;
+        return p ? p->theme () : ap::ui::defaultTheme;
     }
 
     /// 视野状态转发：视图每次打开都会来读一次（恢复上次看到的区间）。
@@ -365,6 +376,7 @@ APlayProcessor::APlayProcessor ()
 
 APlayProcessor::~APlayProcessor ()
 {
+    m_tempo->clear ();
     stopPitchRenderThread ();
 
     // 必须先注销再做析构：注销之后代理就再也取不到这个地址了，
@@ -460,7 +472,7 @@ tresult PLUGIN_API APlayProcessor::setState (IBStream* state)
     m_semitones.store (0, std::memory_order_relaxed);
     m_cents.store (0, std::memory_order_relaxed);
     m_followScore.store (true, std::memory_order_relaxed);
-    m_theme.store (0, std::memory_order_relaxed);
+    m_theme.store (ap::ui::defaultTheme, std::memory_order_relaxed);
     m_scorePath.clear ();
     m_scoreBPM.store (0, std::memory_order_relaxed);
     m_scoreBeats.store (0, std::memory_order_relaxed);
@@ -860,28 +872,36 @@ tresult PLUGIN_API APlayProcessor::process (ProcessData& data)
     // Output silenceFlags belongs to the plugin, not to the host. A generator
     // must render even if the previous block (or an input) was silent.
     bus.silenceFlags = 0;
+    const auto videoAudio = std::atomic_load (&m_videoAudio);
+    const auto render = [&] (float* left, float* right, size_t frames) {
+        if (videoAudio)
+            videoAudio->render (left, right, frames, hostSr,
+                                m_player.volume (), m_hostPlaying.load (std::memory_order_relaxed));
+        else
+            m_player.render (&left, &right, static_cast<uint32> (frames), hostSr);
+    };
 
-    if (bus.channelBuffers32)
+    if (data.symbolicSampleSize == kSample32 && bus.channelBuffers32)
     {
         if (nCh >= 2)
-            m_player.render (&bus.channelBuffers32[0], &bus.channelBuffers32[1],
-                             static_cast<uint32> (nFrames), hostSr);
+            render (bus.channelBuffers32[0], bus.channelBuffers32[1], nFrames);
         else
-            m_player.render (&bus.channelBuffers32[0], &bus.channelBuffers32[0],
-                             static_cast<uint32> (nFrames), hostSr);
+            render (bus.channelBuffers32[0], bus.channelBuffers32[0], nFrames);
     }
-    else if (bus.channelBuffers64)
+    else if (data.symbolicSampleSize == kSample64 && bus.channelBuffers64)
     {
-        std::vector<float> tmpL (static_cast<size_t> (nFrames));
-        std::vector<float> tmpR (static_cast<size_t> (nFrames));
-        float* pL = tmpL.data ();
-        float* pR = tmpR.data ();
-        m_player.render (&pL, &pR, static_cast<uint32> (nFrames), hostSr);
-        for (int32 i = 0; i < nFrames; ++i)
+        constexpr int32 chunkSize = 1024;
+        float tmpL[chunkSize], tmpR[chunkSize];
+        for (int32 offset = 0; offset < nFrames; offset += chunkSize)
         {
-            bus.channelBuffers64[0][i] = static_cast<double> (tmpL[static_cast<size_t> (i)]);
-            if (nCh >= 2)
-                bus.channelBuffers64[1][i] = static_cast<double> (tmpR[static_cast<size_t> (i)]);
+            const int32 count = std::min (chunkSize, nFrames - offset);
+            render (tmpL, tmpR, count);
+            for (int32 i = 0; i < count; ++i)
+            {
+                bus.channelBuffers64[0][offset + i] = static_cast<double> (tmpL[i]);
+                if (nCh >= 2)
+                    bus.channelBuffers64[1][offset + i] = static_cast<double> (tmpR[i]);
+            }
         }
     }
 
@@ -919,6 +939,7 @@ bool APlayProcessor::loadFile (const std::string& path)
 
 void APlayProcessor::unloadFile ()
 {
+    m_tempo->clear ();
     {
         std::lock_guard<std::mutex> lk (m_pitchMutex);
         ++m_pitchGeneration;
@@ -938,6 +959,11 @@ bool APlayProcessor::hasAudio () const { return m_player.hasAudio (); }
 double APlayProcessor::durationSec () const { return m_player.durationSec (); }
 std::string APlayProcessor::currentPath () const { return m_filePath; }
 std::string APlayProcessor::lastError () const { return m_loadError; }
+
+void APlayProcessor::setVideoAudio (std::shared_ptr<ap::VideoAudioStream> stream)
+{
+    std::atomic_store (&m_videoAudio, std::move (stream));
+}
 
 void APlayProcessor::waveformPeaks (std::vector<float>& out, int buckets,
                                     double fromSec, double toSec) const
@@ -1226,6 +1252,7 @@ double APlayProcessor::positionSec () const { return m_player.positionSec (); }
 
 void APlayProcessor::loadCurrentFile ()
 {
+    m_tempo->clear ();
     if (m_filePath.empty ())
     {
         m_loadedOk = false;
@@ -1285,6 +1312,7 @@ void APlayProcessor::loadCurrentFile ()
     }
     m_pitchCv.notify_one ();
     ap::crashLog ("音频已就绪");
+    m_tempo->analyze (m_player.audioSnapshot ());
     m_loadedOk = true;
     m_loadError.clear ();
     applyParams ();

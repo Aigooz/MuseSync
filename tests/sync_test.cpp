@@ -4,6 +4,8 @@
 #include "scorebridge.h"
 #include "win/ui_layout.h"
 #include "ui_theme.h"
+#include "video_audio.h"
+#include "win/video_view.h"
 #include "public.sdk/source/vst/hosting/hostclasses.h"
 #include "public.sdk/source/common/memorystream.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
@@ -11,6 +13,8 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
+#include <shlobj.h>
 #include <windowsx.h>
 #include <algorithm>
 #include <cmath>
@@ -30,7 +34,7 @@ void check (bool condition, const char* message)
     if (!condition) throw std::runtime_error (message);
 }
 
-void savePreview (HWND window, const wchar_t* name)
+void savePreview (HWND window, const wchar_t* name, bool captureScreen = false)
 {
     wchar_t directory[MAX_PATH] {};
     if (!GetEnvironmentVariableW (L"MUSETONE_UI_PREVIEWS", directory, MAX_PATH)) return;
@@ -48,8 +52,16 @@ void savePreview (HWND window, const wchar_t* name)
     HBITMAP bitmap = CreateDIBSection (dc, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
     check (bitmap && pixels, "preview bitmap allocation");
     HGDIOBJ previous = SelectObject (dc, bitmap);
-    SendMessageW (window, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (dc), PRF_CLIENT);
-    for (HWND child = GetWindow (window, GW_CHILD); child; child = GetWindow (child, GW_HWNDNEXT))
+    if (captureScreen)
+    {
+        POINT origin {};
+        ClientToScreen (window, &origin);
+        HDC screen = GetDC (nullptr);
+        BitBlt (dc, 0, 0, r.right, r.bottom, screen, origin.x, origin.y, SRCCOPY | CAPTUREBLT);
+        ReleaseDC (nullptr, screen);
+    }
+    else SendMessageW (window, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (dc), PRF_CLIENT);
+    for (HWND child = captureScreen ? nullptr : GetWindow (window, GW_CHILD); child; child = GetWindow (child, GW_HWNDNEXT))
     {
         if (!(GetWindowLongPtrW (child, GWL_STYLE) & WS_VISIBLE)) continue;
         RECT childRect {};
@@ -171,6 +183,13 @@ struct TestSeekBridge
         check (text.find (L"MC1|") == 0, "progress sends companion seek command");
         return std::stod (text.substr (text.find_last_of (L'|') + 1));
     }
+    void selection (double seconds) const
+    {
+        const auto value = L"MP1|" + std::to_wstring (ap::scoreBridgeNowMs ()) +
+            L"|1000-1|" + std::to_wstring (seconds);
+        check (WritePrivateProfileStringW (L"Position", L"value", value.c_str (),
+            (directory / "MuseToneSync.ini").c_str ()) != 0, "publish test score selection");
+    }
     ~TestSeekBridge ()
     {
         std::error_code error;
@@ -229,19 +248,22 @@ struct Fixture
     }
 };
 
-void writeWave (const std::filesystem::path& path, bool dynamics = false)
+void writeWave (const std::filesystem::path& path, bool dynamics = false, bool tempo = false)
 {
     std::ofstream file (path, std::ios::binary);
     auto u16 = [&] (uint16_t v) { file.write (reinterpret_cast<char*> (&v), 2); };
     auto u32 = [&] (uint32_t v) { file.write (reinterpret_cast<char*> (&v), 4); };
-    const int count = 48000 * 4;
+    const int count = 48000 * (tempo ? 24 : 4);
     file.write ("RIFF", 4); u32 (36 + count * 2); file.write ("WAVEfmt ", 8);
     u32 (16); u16 (1); u16 (1); u32 (48000); u32 (96000); u16 (2); u16 (16);
     file.write ("data", 4); u32 (count * 2);
     for (int i = 0; i < count; ++i)
     {
-        const double envelope = dynamics ? .2 + .8 * std::exp (-std::fmod (i / 48000.0, .5) * 7) : 1;
-        u16 (static_cast<uint16_t> (static_cast<int16_t> (18000 * (dynamics ? envelope : .5) * std::sin (i * .04))));
+        const double seconds = i / 48000.0;
+        const double pulseTime = std::fmod (seconds, seconds < 12 ? 60.0 / 90 : 60.0 / 150);
+        const double envelope = tempo ? std::exp (-pulseTime * 220) :
+            dynamics ? .2 + .8 * std::exp (-std::fmod (seconds, .5) * 7) : .5;
+        u16 (static_cast<uint16_t> (static_cast<int16_t> (18000 * envelope * std::sin (i * .04))));
     }
 }
 
@@ -296,6 +318,7 @@ void scoreTests (const std::filesystem::path& directory)
     check (!ap::readScoreInfo (malformed.u8string (), info, error), "reject malformed XML");
     check (!ap::readScoreInfo ((directory / "missing.mscz").u8string (), info, error), "reject missing score");
     Fixture fixture (false);
+    check (fixture.processor.theme () == 1, "new instances default to dark theme");
     check (fixture.processor.loadScore (score.u8string ()), "backend load score");
     auto timeline = fixture.processor.hostTimeline ();
     check (timeline.scoreTempoValid && timeline.scoreBpm == 90 && timeline.scoreMeterValid &&
@@ -456,6 +479,7 @@ void hiddenControlTests (const std::filesystem::path& wave)
     Fixture fixture (false);
     auto& backend = fixture.processor;
     check (backend.loadFile (wave.u8string ()), "control test audio");
+    backend.setTheme (0);
     // The test host is never shown and never interacts with the user's desktop.
     HWND host = CreateWindowExW (0, L"STATIC", L"MuseTone hidden test", WS_OVERLAPPED,
                                  0, 0, 1000, 700, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
@@ -542,6 +566,57 @@ void hiddenControlTests (const std::filesystem::path& wave)
     SendMessageW (panel, WM_TIMER, 1200, 0);
     checkWavePaint (previewWave, 1);
     savePreview (panel, L"playback-dark.bmp");
+    struct PromptCheck
+    {
+        HWND panel;
+        unsigned paper;
+        bool found = false, matches = false, controls = false, emptyRejected = false;
+    };
+    static PromptCheck* promptCheck = nullptr;
+    for (int theme = 0; theme < ap::ui::themeCount; ++theme)
+    {
+        backend.setTheme (theme);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        PromptCheck state {panel, ap::ui::themes[theme].paper};
+        promptCheck = &state;
+        const UINT_PTR timer = SetTimer (nullptr, 0, 10, [] (HWND, UINT, UINT_PTR timerId, DWORD) {
+            HWND prompt = FindWindowExW (nullptr, nullptr, L"MuseSyncVideoUrlPrompt", nullptr);
+            if (!prompt) return;
+            KillTimer (nullptr, timerId);
+            auto& state = *promptCheck;
+            state.found = true;
+            HDC dc = CreateCompatibleDC (nullptr);
+            HDC windowDc = GetDC (prompt);
+            HBITMAP bitmap = CreateCompatibleBitmap (windowDc, 16, 16);
+            ReleaseDC (prompt, windowDc);
+            const auto old = SelectObject (dc, bitmap);
+            SendMessageW (prompt, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (dc), PRF_CLIENT);
+            const COLORREF expected = RGB ((state.paper >> 16) & 255, (state.paper >> 8) & 255, state.paper & 255);
+            state.matches = GetPixel (dc, 8, 8) == expected;
+            SelectObject (dc, old);
+            DeleteObject (bitmap);
+            DeleteDC (dc);
+            HWND edit = GetDlgItem (prompt, 1), open = GetDlgItem (prompt, 2);
+            state.controls = edit && open && !IsWindowEnabled (state.panel) &&
+                SendMessageW (edit, WM_GETFONT, 0, 0) == SendMessageW (GetDlgItem (state.panel, 1001), WM_GETFONT, 0, 0) &&
+                (GetWindowLongPtrW (open, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW &&
+                !(GetWindowLongPtrW (prompt, GWL_STYLE) & WS_CAPTION) && !IsWindowEnabled (open);
+            SetWindowTextW (edit, L"   ");
+            SendMessageW (prompt, WM_COMMAND, 2, 0);
+            state.emptyRejected = IsWindow (prompt) && !IsWindowEnabled (open);
+            SetWindowTextW (edit, L"https://www.bilibili.com/video/test");
+            state.controls = state.controls && IsWindowEnabled (open);
+            savePreview (prompt, (L"video-url-theme-" + std::to_wstring (state.paper) + L".bmp").c_str ());
+            PostMessageW (edit, WM_KEYDOWN, VK_ESCAPE, 0);
+        });
+        SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1402, BN_CLICKED), 0);
+        KillTimer (nullptr, timer);
+        promptCheck = nullptr;
+        check (state.found && state.matches, "video URL prompt follows each plugin theme");
+        check (state.controls && state.emptyRejected && IsWindowEnabled (panel),
+            "video URL prompt uses shared fonts, themed buttons, validation and Escape cancellation");
+        check (backend.hasAudio (), "cancelling video URL preserves loaded audio");
+    }
     backend.setTheme (0);
     SendMessageW (panel, WM_TIMER, 1200, 0);
 
@@ -574,6 +649,18 @@ void hiddenControlTests (const std::filesystem::path& wave)
     check (std::abs (backend.offsetSec () + 1.24f) < 1e-5, "offset wheel adds 10 ms");
     wheel (offset, -120, MK_SHIFT);
     check (std::abs (backend.offsetSec () + 1.241f) < 1e-5, "Shift wheel subtracts 1 ms");
+    wheel (offset, 120, MK_CONTROL);
+    check (std::abs (backend.offsetSec () + 1.141f) < 1e-5, "Ctrl wheel adds 100 ms");
+    SetFocus (offset);
+    SendMessageW (offset, WM_CHAR, VK_SPACE, 0);
+    wchar_t clean[64] {};
+    GetWindowTextW (offset, clean, 64);
+    check (!std::wcschr (clean, L' '), "numeric edits swallow translated space characters");
+    SetWindowTextW (offset, L"-1250");
+    SendMessageW (offset, WM_KEYDOWN, VK_RETURN, 0);
+    SendMessageW (offset, WM_CHAR, VK_RETURN, 0);
+    check (backend.offsetSec () == -1.25f,
+        "Enter commits offset and consumes the translated character");
     HWND semitones = findEdit (1014), cents = findEdit (1017);
     SetWindowTextW (semitones, L"2");
     check (backend.semitones () == 2, "typing +2 commits without leaving field");
@@ -626,13 +713,13 @@ void hiddenControlTests (const std::filesystem::path& wave)
     backend.setTheme (1);
     SendMessageW (panel, WM_TIMER, 1200, 0);
     SendMessageW (meter, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (memory), PRF_CLIENT);
-    check (GetPixel (memory, r.right - 3, r.bottom / 2) == RGB (23, 24, 26),
+    check (GetPixel (memory, r.right - 3, r.bottom / 2) == RGB (32, 34, 37),
            "dark meter arrow area has no white native button");
     backend.setTheme (2);
     SendMessageW (panel, WM_TIMER, 1200, 0);
     SendMessageW (meter, WM_PRINTCLIENT, reinterpret_cast<WPARAM> (memory), PRF_CLIENT);
-    check (GetPixel (memory, r.right - 3, r.bottom / 2) == RGB (250, 252, 250),
-           "sage meter face follows its surface color");
+    check (GetPixel (memory, r.right - 3, r.bottom / 2) == RGB (18, 18, 18),
+           "black meter face follows its surface color");
 
     const auto compact = ap::ui::arrange (ap::ui::minWidth, ap::ui::minHeight);
     SelectObject (memory, reinterpret_cast<HFONT> (SendMessageW (bpm, WM_GETFONT, 0, 0)));
@@ -640,6 +727,19 @@ void hiddenControlTests (const std::filesystem::path& wave)
     const wchar_t* longestOffset = L"-3600000";
     GetTextExtentPoint32W (memory, longestOffset, 8, &textSize);
     const double scale = static_cast<double> (r.bottom) / compact.timeSig.h;
+    for (int id : {1001, 1035})
+    {
+        HWND button = GetDlgItem (panel, id);
+        RECT bounds {};
+        GetClientRect (button, &bounds);
+        SelectObject (memory, reinterpret_cast<HFONT> (SendMessageW (button, WM_GETFONT, 0, 0)));
+        wchar_t label[32] {};
+        GetWindowTextW (button, label, 32);
+        GetTextExtentPoint32W (memory, label, static_cast<int> (std::wcslen (label)), &textSize);
+        check (textSize.cx + 12 * scale <= bounds.right, "full import label fits button with padding");
+    }
+    SelectObject (memory, reinterpret_cast<HFONT> (SendMessageW (bpm, WM_GETFONT, 0, 0)));
+    GetTextExtentPoint32W (memory, longestOffset, 8, &textSize);
     check (textSize.cx <= (compact.offset.w - 52) * scale,
            "signed maximum offset fits the compact input");
     const wchar_t* tempo = L"400.0";
@@ -827,6 +927,498 @@ void hiddenControlTests (const std::filesystem::path& wave)
     }
 }
 
+void videoAudioTests ()
+{
+    Fixture fixture (false);
+    auto stream = std::make_shared<ap::VideoAudioStream> ();
+    fixture.processor.setVideoAudio (stream);
+    stream->synchronize (true, true);
+    std::vector<float> pcm (4096, .25f);
+    auto push = [&] { stream->push (pcm.data (), 2048, 48000, stream->generation ()); };
+    push ();
+    check (fixture.block (0, ProcessContext::kPlaying) > 60, "video PCM enters VST output");
+    fixture.processor.setVolume (0);
+    push ();
+    check (fixture.block (256, ProcessContext::kPlaying) == 0, "plugin volume mutes video PCM");
+    fixture.processor.setVolume (1);
+    check (fixture.block (512, 0) == 0, "host pause silences and drains video PCM");
+    const auto oldGeneration = stream->generation ();
+    stream->synchronize (true, true);
+    stream->push (pcm.data (), 2048, 48000, oldGeneration);
+    check (fixture.block (48000, ProcessContext::kPlaying) == 0, "seek rejects stale browser packets");
+    stream->push (pcm.data (), 2048, 44100, stream->generation ());
+    check (fixture.block (48256, ProcessContext::kPlaying) > 60, "video PCM resamples to host rate");
+    double left[256] {}, right[256] {};
+    double* channels[] {left, right};
+    fixture.data.symbolicSampleSize = kSample64;
+    fixture.bus.channelBuffers64 = channels;
+    fixture.context.projectTimeSamples += 256;
+    fixture.processor.process (fixture.data);
+    check (left[100] > .24 && right[100] > .24, "video PCM supports double precision hosts");
+    stream->synchronize (true, true);
+    std::vector<float> largePcm (8192, .5f);
+    stream->push (largePcm.data (), 4096, 48000, stream->generation ());
+    std::vector<double> largeLeft (2048), largeRight (2048);
+    double* largeChannels[] {largeLeft.data (), largeRight.data ()};
+    fixture.bus.channelBuffers64 = largeChannels;
+    fixture.data.numSamples = 2048;
+    fixture.context.projectTimeSamples += 256;
+    fixture.processor.process (fixture.data);
+    check (largeLeft[100] > .49 && largeLeft[1500] > .49 && largeRight[1500] > .49,
+        "large double precision blocks retain audio across chunks");
+    fixture.processor.setVideoAudio (nullptr);
+
+    ap::VideoAudioStream ring;
+    ring.synchronize (true, true);
+    std::vector<float> ringInput (8000, .3f), ringLeft (4000), ringRight (4000);
+    for (int i = 0; i < 8; ++i)
+    {
+        ring.push (ringInput.data (), 4000, 48000, ring.generation ());
+        ring.render (ringLeft.data (), ringRight.data (), 4000, 48000, 1, true);
+        check (ringLeft[3000] > .29f && ringRight[3000] > .29f,
+            "video PCM remains continuous across ring buffer wrap");
+    }
+}
+
+void tempoControlTests (const std::filesystem::path& wave)
+{
+    writeWave (wave, false, true);
+    Fixture fixture (false);
+    auto& backend = fixture.processor;
+    check (backend.loadFile (wave.u8string ()), "tempo fixture imports through audio decoder");
+    const auto deadline = GetTickCount64 () + 15000;
+    while (backend.tempoAnalyzer ()->snapshot ()->state == ap::TempoResult::State::Analyzing &&
+           GetTickCount64 () < deadline) Sleep (10);
+    const auto result = backend.tempoAnalyzer ()->snapshot ();
+    check (result->state == ap::TempoResult::State::Ready &&
+           std::abs (result->bpmAt (5) - 90) < 4 && std::abs (result->bpmAt (19) - 150) < 4,
+           "imported WAV publishes variable material BPM");
+    HWND host = CreateWindowExW (0, L"STATIC", L"Hidden BPM test", WS_OVERLAPPED,
+        0, 0, 1000, 700, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
+    auto* view = new ap::PlugView (&backend);
+    check (view->attached (host, kPlatformTypeHWND) == kResultOk, "attach tempo editor");
+    HWND panel = FindWindowExW (host, nullptr, L"MuseToneMainView", nullptr);
+    for (const auto size : {ap::ui::Rect {0, 0, 1000, 700}, ap::ui::Rect {0, 0, 760, 500}})
+    {
+        ViewRect bounds {0, 0, size.w, size.h};
+        view->onSize (&bounds);
+        fixture.block (19 * 48000, 0);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        savePreview (panel, (L"material-bpm-" + std::to_wstring (size.w) + L".bmp").c_str ());
+    }
+    view->removed ();
+    view->release ();
+    DestroyWindow (host);
+}
+
+void browserAudioTests ()
+{
+    wchar_t path[32768] {};
+    if (!GetEnvironmentVariableW (L"MUSESYNC_TEST_VIDEO", path, 32768)) return;
+    Fixture fixture (false);
+    ap::VideoView video;
+    check (video.openLocal (path), "open browser PCM test video");
+    HWND host = CreateWindowExW (0, L"STATIC", L"MuseSync browser audio test", WS_OVERLAPPEDWINDOW,
+        100, 100, 640, 400, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
+    video.present (host, 0, 0, 620, 360, true);
+    fixture.processor.setVideoAudio (video.audioStream ());
+    const auto start = GetTickCount64 ();
+    double energy = 0;
+    while (GetTickCount64 () - start < 10000 && energy < 1)
+    {
+        MSG message {};
+        while (PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage (&message);
+            DispatchMessageW (&message);
+        }
+        const double seconds = (GetTickCount64 () - start) / 1000.0;
+        video.sync (std::fmod (seconds, 3.0), true);
+        energy += fixture.block (static_cast<int64> (seconds * 48000), ProcessContext::kPlaying, 960);
+        MsgWaitForMultipleObjects (0, nullptr, FALSE, 20, QS_ALLINPUT);
+    }
+    std::printf ("Browser video VST energy: %.3f\n", energy);
+    check (energy > 1, "actual browser video audio reaches host mixer bus");
+    video.close ();
+    DestroyWindow (host);
+    fixture.processor.setVideoAudio (nullptr);
+}
+
+void videoControlTests (const std::filesystem::path& wave)
+{
+    wchar_t videoPath[32768] {};
+    if (!GetEnvironmentVariableW (L"MUSESYNC_TEST_VIDEO", videoPath, 32768)) return;
+    Fixture fixture (false);
+    auto& backend = fixture.processor;
+    check (backend.loadFile (wave.u8string ()), "video test starts with audio");
+    HWND host = CreateWindowExW (0, L"STATIC", L"MuseSync video test", WS_OVERLAPPED,
+        0, 0, 1000, 700, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
+    auto* view = new ap::PlugView (&backend);
+    check (view->attached (host, kPlatformTypeHWND) == kResultOk, "attach video test editor");
+    HWND panel = FindWindowExW (host, nullptr, L"MuseToneMainView", nullptr);
+    const bool visible = GetEnvironmentVariableW (L"MUSESYNC_TEST_VISIBLE", nullptr, 0) != 0;
+    if (visible)
+    {
+        ViewRect size {0, 0, 760, 500};
+        view->onSize (&size);
+        SetWindowPos (host, HWND_TOPMOST, 0, 0, 760, 500, SWP_NOACTIVATE);
+        ShowWindow (host, SW_SHOWNOACTIVATE);
+    }
+    auto waitUntil = [&] (auto predicate) {
+        const auto deadline = GetTickCount64 () + 15000;
+        do
+        {
+            MSG message {};
+            while (PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE))
+            {
+                TranslateMessage (&message);
+                DispatchMessageW (&message);
+            }
+            SendMessageW (panel, WM_TIMER, 1200, 0);
+            if (predicate ()) return true;
+            MsgWaitForMultipleObjects (0, nullptr, FALSE, 20, QS_ALLINPUT);
+        } while (GetTickCount64 () < deadline);
+        return false;
+    };
+    auto dropFile = [&] (const std::wstring& path) {
+        const size_t bytes = sizeof (DROPFILES) + (path.size () + 2) * sizeof (wchar_t);
+        HGLOBAL memory = GlobalAlloc (GHND, bytes);
+        auto* drop = static_cast<DROPFILES*> (GlobalLock (memory));
+        drop->pFiles = sizeof (DROPFILES);
+        drop->fWide = TRUE;
+        std::memcpy (reinterpret_cast<char*> (drop) + sizeof (DROPFILES),
+            path.c_str (), (path.size () + 1) * sizeof (wchar_t));
+        GlobalUnlock (memory);
+        SendMessageW (panel, WM_DROPFILES, reinterpret_cast<WPARAM> (memory), 0);
+    };
+    dropFile (videoPath);
+    HWND progress = GetDlgItem (panel, 1032);
+    check (!backend.hasAudio () && backend.currentPath ().empty (), "video import unloads audio");
+    check (waitUntil ([&] { return IsWindowEnabled (progress); }),
+        "video duration enables progress before host provides a playhead");
+    check (waitUntil ([&] {
+        return backend.tempoAnalyzer ()->snapshot ()->state == ap::TempoResult::State::Ready;
+    }), "local video soundtrack is decoded and analyzed without playback");
+    fixture.block (48000, 0);
+    SendMessageW (panel, WM_TIMER, 1200, 0);
+    HWND video = FindWindowExW (panel, nullptr, L"MuseSyncVideoView", nullptr);
+    check (video != nullptr, "video embedded in main editor");
+    RECT videoRect {}, waveRect {};
+    GetWindowRect (video, &videoRect);
+    HWND waveform = FindWindowExW (panel, nullptr, L"MuseToneWaveView", nullptr);
+    GetWindowRect (waveform, &waveRect);
+    check (EqualRect (&videoRect, &waveRect), "video occupies exact waveform bounds");
+    for (const auto size : {ap::ui::Rect {0, 0, 1280, 800}, ap::ui::Rect {0, 0, 760, 500}})
+    {
+        SetWindowPos (host, nullptr, 0, 0, size.w, size.h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        ViewRect bounds {0, 0, size.w, size.h};
+        view->onSize (&bounds);
+        check (waitUntil ([&] {
+            GetWindowRect (video, &videoRect);
+            GetWindowRect (waveform, &waveRect);
+            return EqualRect (&videoRect, &waveRect);
+        }), "resizing main editor keeps video in waveform bounds");
+    }
+    if (visible)
+    {
+        const bool rendered = waitUntil ([&] {
+            HDC screen = GetDC (nullptr);
+            int colored = 0;
+            for (int y = videoRect.top + 50; y < videoRect.bottom - 30; y += 20)
+                for (int x = videoRect.left + 30; x < videoRect.right - 30; x += 20)
+                {
+                    const COLORREF c = GetPixel (screen, x, y);
+                    if (c != CLR_INVALID && std::max ({GetRValue (c), GetGValue (c), GetBValue (c)}) -
+                        std::min ({GetRValue (c), GetGValue (c), GetBValue (c)}) > 70) ++colored;
+                }
+            ReleaseDC (nullptr, screen);
+            return colored > 30;
+        });
+        savePreview (panel, L"video-expanded-screen.bmp", true);
+        check (rendered, "embedded video renders colored frames on screen");
+    }
+    check (!(GetWindowLongPtrW (waveform, GWL_STYLE) & WS_VISIBLE), "video hides waveform");
+    check (!IsWindowEnabled (GetDlgItem (panel, 1014)), "video disables audio-only pitch controls");
+    for (const int id : {1002, 1003, 1004, 1006, 1007})
+        check (!(GetWindowLongPtrW (GetDlgItem (panel, id), GWL_STYLE) & WS_VISIBLE),
+            "video hides waveform-only tools");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1024, BN_CLICKED), 0);
+    check (waitUntil ([&] { return !(GetWindowLongPtrW (video, GWL_STYLE) & WS_VISIBLE); }),
+        "help hides embedded video");
+    SendMessageW (panel, WM_KEYDOWN, VK_ESCAPE, 0);
+    check (waitUntil ([&] { return (GetWindowLongPtrW (video, GWL_STYLE) & WS_VISIBLE) != 0; }),
+        "closing help restores video");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1029, BN_CLICKED), 0);
+    HWND floating = FindWindowExW (nullptr, nullptr, L"MuseToneFloatingView", nullptr);
+    check (floating && GetParent (progress) == floating, "video floating window shares progress control");
+    HWND floatingVolume = GetDlgItem (floating, 1012), floatingOffset = GetDlgItem (floating, 1025);
+    check (floatingVolume && floatingOffset, "floating video shares volume and delay controls");
+    SendMessageW (floatingVolume, TBM_SETPOS, TRUE, 37);
+    SendMessageW (floating, WM_HSCROLL, TB_THUMBPOSITION, reinterpret_cast<LPARAM> (floatingVolume));
+    check (std::abs (backend.volume () - .37f) < 1e-5, "floating volume updates audio backend");
+    SetWindowTextW (floatingOffset, L"150");
+    SendMessageW (floating, WM_COMMAND, MAKEWPARAM (1025, EN_KILLFOCUS), reinterpret_cast<LPARAM> (floatingOffset));
+    check (std::abs (backend.offsetSec () - .15f) < 1e-5, "floating delay commits to shared backend");
+    SendMessageW (floatingOffset, WM_MOUSEWHEEL, MAKEWPARAM (MK_CONTROL, 120), 0);
+    check (std::abs (backend.offsetSec () - .25f) < 1e-5, "floating Ctrl wheel adjusts delay by 100 ms");
+    backend.setOffsetSec (0);
+    backend.setVolume (1);
+    check (waitUntil ([&] { return GetParent (video) == floating; }), "video moves into floating window");
+    check ((GetWindowLongPtrW (video, GWL_STYLE) & WS_POPUP) &&
+           !(GetWindowLongPtrW (video, GWL_STYLE) & WS_CHILD), "floating video is an owned popup");
+    const LONG_PTR throughStyles = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE;
+    check ((GetWindowLongPtrW (video, GWL_EXSTYLE) & throughStyles) == throughStyles,
+        "video surface passes mouse input through without activation");
+    check (!(GetWindowLongPtrW (panel, GWL_STYLE) & WS_VISIBLE), "video collapse hides main editor");
+    const auto previousProgress = SendMessageW (progress, TBM_GETPOS, 0, 0);
+    fixture.block (96000, 0);
+    SendMessageW (panel, WM_TIMER, 1200, 0);
+    check (SendMessageW (progress, TBM_GETPOS, 0, 0) > previousProgress,
+        "floating video progress follows score position");
+    RECT expandRect {}, collapseRect {}, floatingRect {};
+    GetWindowRect (GetDlgItem (floating, 1030), &expandRect);
+    GetWindowRect (GetDlgItem (panel, 1029), &collapseRect);
+    GetWindowRect (floating, &floatingRect);
+    MONITORINFO monitor {sizeof monitor};
+    GetMonitorInfoW (MonitorFromRect (&collapseRect, MONITOR_DEFAULTTONEAREST), &monitor);
+    const int expectedX = std::clamp<LONG> (
+        floatingRect.left + (collapseRect.left + collapseRect.right - expandRect.left - expandRect.right) / 2,
+        monitor.rcWork.left, std::max (monitor.rcWork.left,
+            monitor.rcWork.right - (floatingRect.right - floatingRect.left)));
+    check (std::abs (floatingRect.left - expectedX) <= 1,
+        "video floating expand stays aligned with collapse within monitor bounds");
+    HWND opacity = GetDlgItem (floating, 1036);
+    check (opacity != nullptr, "floating video has opacity slider");
+    SendMessageW (opacity, TBM_SETPOS, TRUE, 55);
+    SendMessageW (floating, WM_HSCROLL, TB_THUMBPOSITION, reinterpret_cast<LPARAM> (opacity));
+    BYTE alpha = 0;
+    DWORD flags = 0;
+    check (GetLayeredWindowAttributes (floating, nullptr, &alpha, &flags) &&
+        alpha == 55 * 255 / 100 && flags == LWA_ALPHA, "opacity adjusts floating window alpha");
+    check (waitUntil ([&] {
+        return GetLayeredWindowAttributes (video, nullptr, &alpha, &flags) && alpha == 55 * 255 / 100;
+    }), "opacity also updates independent video layer");
+    SendMessageW (opacity, WM_KEYDOWN, VK_RIGHT, 0);
+    check (SendMessageW (opacity, TBM_GETPOS, 0, 0) == 56 &&
+        GetLayeredWindowAttributes (floating, nullptr, &alpha, &flags) && alpha == 56 * 255 / 100,
+        "opacity keyboard updates window alpha");
+    RECT opacityRect {};
+    GetClientRect (opacity, &opacityRect);
+    SendMessageW (opacity, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM (opacityRect.right / 2, opacityRect.bottom / 2));
+    SendMessageW (opacity, WM_LBUTTONUP, 0, MAKELPARAM (opacityRect.right / 2, opacityRect.bottom / 2));
+    check (std::abs (SendMessageW (opacity, TBM_GETPOS, 0, 0) - 60) <= 1,
+        "opacity click uses displayed slider range");
+    {
+        TestSeekBridge bridge;
+        SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1021, BN_CLICKED), 0);
+        fixture.block (0, 0);
+        bridge.selection (.5);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        const auto firstSelection = SendMessageW (progress, TBM_GETPOS, 0, 0);
+        bridge.selection (1.5);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        check (SendMessageW (progress, TBM_GETPOS, 0, 0) > firstSelection,
+            "paused video progress follows score selection without host playback");
+        fixture.block (96000, ProcessContext::kPlaying);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        fixture.block (96000, 0);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        const auto stoppedProgress = SendMessageW (progress, TBM_GETPOS, 0, 0);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        check (SendMessageW (progress, TBM_GETPOS, 0, 0) == stoppedProgress,
+            "pause retains host position instead of stale selection");
+        SendMessageW (progress, WM_KEYDOWN, VK_HOME, 0);
+        check (bridge.target () == 0, "floating video Home seeks score start");
+        fixture.block (0, 0);
+        SendMessageW (panel, WM_TIMER, 1200, 0);
+        SendMessageW (progress, WM_KEYDOWN, VK_RIGHT, 0);
+        check (std::abs (bridge.target () - 1.0) < .02, "floating video progress seeks score");
+    }
+    SetWindowPos (floating, nullptr, 0, 0, 760, 500, SWP_NOZORDER | SWP_NOACTIVATE);
+    check (waitUntil ([&] {
+        RECT client {}, bounds {};
+        GetClientRect (floating, &client);
+        GetWindowRect (video, &bounds);
+        return bounds.right - bounds.left == client.right - 12;
+    }), "floating resize updates video bounds");
+    HRGN toolbarRegion = CreateRectRgn (0, 0, 0, 0);
+    check (GetWindowRgn (floating, toolbarRegion) != ERROR &&
+           PtInRegion (toolbarRegion, 20, 20) && !PtInRegion (toolbarRegion, 20, 200) &&
+           PtInRegion (toolbarRegion, 2, 200) && PtInRegion (toolbarRegion, 758, 200) &&
+           PtInRegion (toolbarRegion, 380, 498),
+        "toolbar and resize frame remain interactive around video cutout");
+    DeleteObject (toolbarRegion);
+    SetWindowPos (floating, nullptr, 120, 140, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    check (waitUntil ([&] {
+        RECT bounds {}, toolbar {};
+        GetWindowRect (floating, &toolbar);
+        GetWindowRect (video, &bounds);
+        return bounds.left == toolbar.left + 6 && bounds.top == toolbar.top + 88;
+    }), "dragging toolbar keeps transparent video aligned");
+    fixture.block (48000, ProcessContext::kPlaying);
+    SendMessageW (panel, WM_TIMER, 1200, 0);
+    for (int i = 0; i < 150; ++i)
+        SetWindowPos (floating, nullptr, 120 + i, 140 + i / 2, 0, 0,
+                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    check (waitUntil ([&] {
+        RECT bounds {}, toolbar {};
+        GetWindowRect (floating, &toolbar);
+        GetWindowRect (video, &bounds);
+        return bounds.left == toolbar.left + 6 && bounds.top == toolbar.top + 88;
+    }), "rapid moves leave video aligned at the final position");
+    check (GetLayeredWindowAttributes (video, nullptr, &alpha, &flags) &&
+           alpha == SendMessageW (opacity, TBM_GETPOS, 0, 0) * 255 / 100,
+        "rapid moves preserve video opacity");
+    const auto progressBeforeMovePlayback = SendMessageW (progress, TBM_GETPOS, 0, 0);
+    fixture.block (144000, ProcessContext::kPlaying);
+    SendMessageW (panel, WM_TIMER, 1200, 0);
+    check (SendMessageW (progress, TBM_GETPOS, 0, 0) > progressBeforeMovePlayback,
+        "playback progress advances after rapid moves");
+    fixture.block (144000, 0);
+    const auto hitAt = [&] (int x, int y) {
+        RECT bounds {};
+        GetWindowRect (floating, &bounds);
+        return SendMessageW (floating, WM_NCHITTEST, 0,
+            MAKELPARAM (bounds.left + x, bounds.top + y));
+    };
+    check (hitAt (2, 250) == HTLEFT && hitAt (758, 250) == HTRIGHT &&
+           hitAt (380, 498) == HTBOTTOM && hitAt (380, 2) == HTTOP &&
+           hitAt (2, 2) == HTTOPLEFT && hitAt (758, 2) == HTTOPRIGHT &&
+           hitAt (2, 498) == HTBOTTOMLEFT && hitAt (758, 498) == HTBOTTOMRIGHT,
+        "all four edges and corners resize floating video");
+    check (hitAt (380, 250) == HTTRANSPARENT && hitAt (24, 22) == HTCAPTION,
+        "video center passes input through while toolbar remains draggable");
+    // Desktop hit testing can be obstructed by another application's topmost
+    // window. Never send mouse input to an unrelated window during this test.
+    HWND underlay = CreateWindowExW (WS_EX_TOPMOST | WS_EX_NOACTIVATE, L"STATIC", L"Input target",
+        WS_POPUP | WS_VISIBLE, 120, 140, 760, 500, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
+    check (underlay != nullptr, "create underlying input target");
+    ShowWindow (floating, SW_SHOWNOACTIVATE);
+    SetWindowPos (floating, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SendMessageW (floating, WM_MOVE, 0, 0);
+    check (waitUntil ([&] { return IsWindowVisible (video) != FALSE; }), "video overlay visible");
+    RECT overlayBounds {};
+    GetWindowRect (video, &overlayBounds);
+    POINT target {(overlayBounds.left + overlayBounds.right) / 2,
+                  (overlayBounds.top + overlayBounds.bottom) / 2};
+    SetWindowPos (underlay, video, overlayBounds.left, overlayBounds.top,
+        overlayBounds.right - overlayBounds.left, overlayBounds.bottom - overlayBounds.top, SWP_NOACTIVATE);
+    HWND hitBefore = WindowFromPoint (target);
+    const bool obstructed = hitBefore != underlay && GetAncestor (hitBefore, GA_ROOT) != video;
+    bool mousePassed = false;
+    if (obstructed)
+    {
+        std::puts ("SKIP: desktop mouse-through check obstructed by another application's topmost window");
+    }
+    else
+    {
+        mousePassed = waitUntil ([&] { return WindowFromPoint (target) == underlay; });
+    }
+    ShowWindow (floating, SW_HIDE);
+    DestroyWindow (underlay);
+    check (obstructed || mousePassed, "mouse over video reaches underlying window across threads");
+    RECT progressBounds {};
+    GetWindowRect (progress, &progressBounds);
+    const auto toolbarHit = SendMessageW (floating, WM_NCHITTEST, 0, MAKELPARAM (
+        (progressBounds.left + progressBounds.right) / 2, (progressBounds.top + progressBounds.bottom) / 2));
+    check (toolbarHit == HTCLIENT, "toolbar progress remains clickable");
+    if (visible) ShowWindow (floating, SW_SHOWNOACTIVATE);
+    savePreview (floating, L"video-floating.bmp");
+    if (visible)
+    {
+        savePreview (floating, L"video-floating-screen.bmp", true);
+        SendMessageW (opacity, TBM_SETPOS, TRUE, 100);
+        SendMessageW (floating, WM_HSCROLL, TB_THUMBPOSITION, reinterpret_cast<LPARAM> (opacity));
+        const auto ready = GetTickCount64 () + 400;
+        waitUntil ([&] { return GetTickCount64 () >= ready; });
+        savePreview (floating, L"video-floating-opaque-screen.bmp", true);
+    }
+    const double floatingScale = (expandRect.bottom - expandRect.top) / 36.0;
+    MINMAXINFO minimum {};
+    SendMessageW (floating, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM> (&minimum));
+    check (minimum.ptMinTrackSize.x <= std::lround (280 * floatingScale) + 1 &&
+           minimum.ptMinTrackSize.y <= std::lround (180 * floatingScale) + 1,
+           "video floating minimum permits a small window");
+    SetWindowPos (floating, nullptr, 0, 0, minimum.ptMinTrackSize.x, minimum.ptMinTrackSize.y,
+                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    RECT smallWindow {}, smallClient {};
+    GetWindowRect (floating, &smallWindow);
+    GetClientRect (floating, &smallClient);
+    check (smallWindow.right - smallWindow.left == smallClient.right &&
+           smallWindow.bottom - smallWindow.top == smallClient.bottom,
+           "floating window has no native non-client white strip");
+    check (waitUntil ([&] {
+        RECT bounds {};
+        GetWindowRect (video, &bounds);
+        return bounds.right - bounds.left == smallClient.right - 12;
+    }), "small floating video finishes asynchronous resize");
+    for (HWND control : {progress, opacity, GetDlgItem (floating, 1030),
+                        GetDlgItem (floating, 1012), GetDlgItem (floating, 1025), video})
+    {
+        RECT bounds {};
+        GetWindowRect (control, &bounds);
+        MapWindowPoints (nullptr, floating, reinterpret_cast<POINT*> (&bounds), 2);
+        check (bounds.left >= 0 && bounds.top >= 0 && bounds.right <= smallClient.right &&
+               bounds.bottom <= smallClient.bottom, "small video floating controls stay in bounds");
+    }
+    savePreview (floating, L"video-floating-small.bmp");
+    if (visible) savePreview (floating, L"video-floating-small-screen.bmp", true);
+    SendMessageW (floating, WM_COMMAND, MAKEWPARAM (1030, BN_CLICKED), 0);
+    check (waitUntil ([&] { return GetParent (video) == panel; }), "expand embeds video again");
+    check (waitUntil ([&] { return (GetWindowLongPtrW (video, GWL_STYLE) & WS_CHILD) &&
+           !(GetWindowLongPtrW (video, GWL_EXSTYLE) & throughStyles); }),
+        "expanded video restores ordinary embedded window styles");
+    check (GetParent (progress) == panel, "expand restores main progress control");
+    check (GetParent (floatingVolume) == panel && GetParent (floatingOffset) == panel,
+        "expand restores shared volume and delay controls");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1029, BN_CLICKED), 0);
+    check (waitUntil ([&] { return GetParent (video) == floating; }), "video can collapse repeatedly");
+    check (GetLayeredWindowAttributes (floating, nullptr, &alpha, &flags) &&
+        alpha == SendMessageW (opacity, TBM_GETPOS, 0, 0) * 255 / 100,
+        "video opacity persists after expand and collapse");
+    SendMessageW (floating, WM_COMMAND, MAKEWPARAM (1030, BN_CLICKED), 0);
+    check (waitUntil ([&] { return GetParent (video) == panel; }), "repeated expand restores video parent");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1024, BN_CLICKED), 0);
+    dropFile (wave.wstring ());
+    check (backend.hasAudio (), "audio import replaces video");
+    check (!IsWindow (video) && !(GetWindowLongPtrW (waveform, GWL_STYLE) & WS_VISIBLE),
+        "audio replacement keeps waveform hidden behind help");
+    check (!(GetWindowLongPtrW (GetDlgItem (panel, 1014), GWL_STYLE) & WS_VISIBLE),
+        "audio replacement keeps parameter controls hidden behind help");
+    SendMessageW (panel, WM_KEYDOWN, VK_ESCAPE, 0);
+    check (!IsWindow (video) && (GetWindowLongPtrW (waveform, GWL_STYLE) & WS_VISIBLE),
+        "audio import closes video and restores waveform");
+    check (IsWindowEnabled (GetDlgItem (panel, 1014)), "audio restores pitch controls");
+    for (const int id : {1002, 1003, 1004, 1006, 1007})
+        check ((GetWindowLongPtrW (GetDlgItem (panel, id), GWL_STYLE) & WS_VISIBLE) != 0,
+            "audio restores waveform-only tools");
+    check (IsWindowEnabled (GetDlgItem (panel, 1037)), "loaded audio enables close material");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1037, BN_CLICKED), 0);
+    check (!backend.hasAudio () && backend.currentPath ().empty () && !IsWindowEnabled (progress) &&
+           !IsWindowEnabled (GetDlgItem (panel, 1037)), "close material clears audio and progress");
+    dropFile (videoPath);
+    check (waitUntil ([&] {
+        video = FindWindowExW (panel, nullptr, L"MuseSyncVideoView", nullptr);
+        return video && IsWindowEnabled (GetDlgItem (panel, 1037));
+    }), "video enables close material");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1037, BN_CLICKED), 0);
+    check (!IsWindow (video) && !IsWindowEnabled (progress) &&
+           !IsWindowEnabled (GetDlgItem (panel, 1037)), "close material destroys video and clears progress");
+    check (backend.tempoAnalyzer ()->snapshot ()->state == ap::TempoResult::State::Empty,
+        "closing video clears soundtrack BPM results");
+    dropFile (videoPath);
+    check (waitUntil ([&] { return IsWindowEnabled (progress); }), "video can reopen after audio replacement");
+    video = FindWindowExW (panel, nullptr, L"MuseSyncVideoView", nullptr);
+    check (video != nullptr, "reopened video embedded before collapse");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1029, BN_CLICKED), 0);
+    check (waitUntil ([&] { return GetWindow (video, GW_OWNER) == floating; }),
+        "second video collapses");
+    view->removed ();
+    check (!IsWindow (floating), "closing collapsed video destroys floating window");
+    view->release ();
+    DestroyWindow (host);
+}
+
 void pitchOutputTests (const std::filesystem::path& wave)
 {
     Fixture fixture (false);
@@ -896,12 +1488,46 @@ void pitchOutputTests (const std::filesystem::path& wave)
 }
 } // namespace
 
-int main ()
+int main (int argc, char** argv)
 {
     const auto directory = std::filesystem::temp_directory_path () /
         (L"MuseTone-test-" + std::to_wstring (GetCurrentProcessId ()));
     try
     {
+        if (argc == 3 && std::strcmp (argv[1], "--video-probe") == 0)
+        {
+            Fixture fixture (false);
+            ap::VideoView video;
+            const auto target = std::filesystem::u8path (argv[2]).wstring ();
+            const bool local = std::filesystem::is_regular_file (target);
+            check (local ? video.openLocal (target) : video.openUrl (target), "video probe opens");
+            HWND host = CreateWindowExW (0, L"STATIC", L"MuseSync video verification", WS_OVERLAPPEDWINDOW,
+                100, 100, 960, 640, nullptr, nullptr, GetModuleHandleW (nullptr), nullptr);
+            ShowWindow (host, SW_SHOWNOACTIVATE);
+            video.present (host, 0, 0, 940, 600, true);
+            fixture.processor.setVideoAudio (video.audioStream ());
+            const auto start = GetTickCount64 ();
+            double energy = 0;
+            while (GetTickCount64 () - start < 45000)
+            {
+                MSG message {};
+                while (PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE))
+                {
+                    TranslateMessage (&message);
+                    DispatchMessageW (&message);
+                }
+                const double seconds = (GetTickCount64 () - start) / 1000.0;
+                const double duration = video.durationSec ();
+                video.sync (duration > 0 ? std::fmod (seconds, duration) : seconds, true);
+                energy += fixture.block (static_cast<int64> (seconds * 48000), ProcessContext::kPlaying, 960);
+                MsgWaitForMultipleObjects (0, nullptr, FALSE, 20, QS_ALLINPUT);
+            }
+            video.close ();
+            DestroyWindow (host);
+            std::printf ("Probe VST energy: %.3f\n", energy);
+            check (energy > 1, "probe sends audio to VST");
+            return 0;
+        }
         std::filesystem::create_directory (directory);
         const auto wave = directory / "test.wav";
         writeWave (wave);
@@ -909,9 +1535,13 @@ int main ()
         scoreTests (directory);
         transportTests (wave);
         pitchOutputTests (wave);
+        videoAudioTests ();
+        browserAudioTests ();
         liveScoreTests ();
         writeWave (wave, true);
         hiddenControlTests (wave);
+        videoControlTests (wave);
+        tempoControlTests (wave);
         // Only the explicitly created test directory is removed.
         std::filesystem::remove_all (directory);
         std::puts ("PASS: MSCX / MSCZ parsing, Unicode paths, state, host transport, MuseScore fallback and audio output");

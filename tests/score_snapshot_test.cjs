@@ -62,6 +62,18 @@ changing.newCursor = () => {
         get tempo() {return points[i].tempo;}};
 };
 const changingMetadata = api.readScore(changing, 480);
+assert.equal(api.selectionSeconds(null, 480, changingMetadata), null);
+assert.equal(api.selectionSeconds({selection: {}}, 480, changingMetadata), null);
+const selectionScore = {selection: {isRange: true, startSegment: {tick: 2400}}};
+assert.equal(api.selectionSeconds(selectionScore, 480, changingMetadata), 4);
+selectionScore.selection = {elements: [{parent: {parent: {tick: 2880}}}]};
+assert.ok(Math.abs(api.selectionSeconds(selectionScore, 480, changingMetadata) - (4 + 1 / 3)) < 1e-8);
+selectionScore.selection.elements.push({parent: {tick: 480}});
+assert.equal(api.selectionSeconds(selectionScore, 480, changingMetadata), .5,
+    'list selection uses earliest selected note, with tempo map');
+assert.equal(api.selectionSeconds(selectionScore, 0, changingMetadata), null);
+selectionScore.selection = {elements: [{tick: -1}, {parent: {tick: NaN}}]};
+assert.equal(api.selectionSeconds(selectionScore, 480, changingMetadata), null);
 assert.equal(changingMetadata.tempos, '2.000000000,60.000000;5.000000000,180.000000');
 assert.equal(changingMetadata.changes, '2,3,4');
 const multiTrack = score(1, [[4, 4], [3, 4]]);

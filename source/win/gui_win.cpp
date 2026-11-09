@@ -17,6 +17,7 @@
 #include "numeric_input.h"
 #include "ui_theme.h"
 #include "scorebridge.h"
+#include "video_timeline.h"
 #include "updater.h"
 #include "video_view.h"
 
@@ -25,6 +26,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <objbase.h>
 
 #include <algorithm>
 #include <cmath>
@@ -165,6 +167,8 @@ enum : int
     IDC_UPDATE_CHECK,
     IDC_UPDATE_ACTION,
     IDC_OPEN_VIDEO,
+    IDC_VIDEO_OPACITY,
+    IDC_CLOSE_MEDIA,
     IDC_OPEN_VIDEO_LOCAL = 1401,
     IDC_OPEN_VIDEO_URL,
     IDC_TIMER_UI = 1200
@@ -179,11 +183,19 @@ struct VideoUrlPrompt
     HWND window = nullptr;
     HWND edit = nullptr;
     HWND label = nullptr;
-    HWND hint = nullptr;
     HWND open = nullptr;
     HWND cancel = nullptr;
+    HWND close = nullptr;
+    ap::ui::Theme theme {};
+    HFONT font = nullptr;
+    HFONT titleFont = nullptr;
+    HFONT iconFont = nullptr;
+    HBRUSH background = nullptr;
+    HBRUSH surface = nullptr;
+    double scale = 1.0;
     std::wstring* value = nullptr;
     bool accepted = false;
+    int px (int n) const { return static_cast<int> (std::lround (n * scale)); }
 };
 
 constexpr wchar_t kVideoUrlPromptClass[] = L"MuseSyncVideoUrlPrompt";
@@ -198,72 +210,155 @@ LRESULT CALLBACK videoUrlPromptProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         ::SetWindowLongPtrW (hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR> (prompt));
     }
     if (!prompt) return ::DefWindowProcW (hwnd, msg, wp, lp);
+    const auto color = [] (unsigned rgb) { return RGB ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255); };
+    const auto& theme = prompt->theme;
     switch (msg)
     {
         case WM_CREATE:
         {
-            prompt->label = ::CreateWindowW (L"STATIC", L"视频网页地址",
+            prompt->label = ::CreateWindowW (L"STATIC", L"视频网址",
                 WS_CHILD | WS_VISIBLE, 24, 20, 512, 22, hwnd,
                 nullptr, ::GetModuleHandleW (nullptr), nullptr);
-            prompt->edit = ::CreateWindowExW (WS_EX_CLIENTEDGE, L"EDIT", L"",
+            prompt->edit = ::CreateWindowExW (0, L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 24, 54, 512, 32, hwnd,
                 reinterpret_cast<HMENU> (1), ::GetModuleHandleW (nullptr), nullptr);
-            prompt->hint = ::CreateWindowW (L"STATIC",
-                L"支持 Bilibili 等网页。只有页面提供可访问的 HTML5 视频时，才能跟随谱面播放、暂停和跳转；登录可在视频小窗内完成。",
-                WS_CHILD | WS_VISIBLE | SS_LEFT, 24, 98, 620, 46, hwnd,
-                nullptr, ::GetModuleHandleW (nullptr), nullptr);
-            prompt->open = ::CreateWindowW (L"BUTTON", L"打开", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            ::SendMessageW (prompt->edit, EM_SETCUEBANNER, FALSE,
+                reinterpret_cast<LPARAM> (L"https://www.bilibili.com/video/..."));
+            ::SendMessageW (prompt->edit, EM_SETLIMITTEXT, 2047, 0);
+            prompt->open = ::CreateWindowW (L"BUTTON", L"打开", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 330, 160, 104, 36, hwnd, reinterpret_cast<HMENU> (2),
                 ::GetModuleHandleW (nullptr), nullptr);
-            prompt->cancel = ::CreateWindowW (L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            prompt->cancel = ::CreateWindowW (L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 448, 160, 104, 36, hwnd, reinterpret_cast<HMENU> (3),
                 ::GetModuleHandleW (nullptr), nullptr);
-            ::SetFocus (prompt->edit);
+            prompt->close = ::CreateWindowW (L"BUTTON", L"关闭", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+                0, 0, 32, 32, hwnd, reinterpret_cast<HMENU> (4), ::GetModuleHandleW (nullptr), nullptr);
+            for (HWND control : {prompt->label, prompt->edit, prompt->open, prompt->cancel})
+                ::SendMessageW (control, WM_SETFONT, reinterpret_cast<WPARAM> (prompt->font), TRUE);
+            ::EnableWindow (prompt->open, FALSE);
             return 0;
         }
         case WM_SIZE:
         {
             const int width = LOWORD (lp);
             const int height = HIWORD (lp);
-            const int margin = 24;
-            const int buttonWidth = 104;
-            const int buttonHeight = 36;
-            const int gap = 14;
-            const int buttonY = std::max (160, height - margin - buttonHeight);
-            if (prompt->label) ::SetWindowPos (prompt->label, nullptr, margin, 20,
-                std::max (1, width - margin * 2), 22, SWP_NOZORDER);
-            if (prompt->edit) ::SetWindowPos (prompt->edit, nullptr, margin, 54,
-                std::max (1, width - margin * 2), 32, SWP_NOZORDER);
-            if (prompt->hint) ::SetWindowPos (prompt->hint, nullptr, margin, 98,
-                std::max (1, width - margin * 2), 46, SWP_NOZORDER);
+            const int margin = prompt->px (24);
+            const int buttonWidth = prompt->px (88);
+            const int buttonHeight = prompt->px (32);
+            const int gap = prompt->px (12);
+            const int buttonY = height - margin - buttonHeight;
+            if (prompt->label) ::SetWindowPos (prompt->label, nullptr, margin, prompt->px (66),
+                std::max (1, width - margin * 2), prompt->px (22), SWP_NOZORDER);
+            if (prompt->edit) ::SetWindowPos (prompt->edit, nullptr, margin + prompt->px (10), prompt->px (102),
+                std::max (1, width - margin * 2 - prompt->px (20)), prompt->px (24), SWP_NOZORDER);
             if (prompt->cancel) ::SetWindowPos (prompt->cancel, nullptr,
                 width - margin - buttonWidth, buttonY, buttonWidth, buttonHeight, SWP_NOZORDER);
             if (prompt->open) ::SetWindowPos (prompt->open, nullptr,
                 width - margin - buttonWidth * 2 - gap, buttonY, buttonWidth, buttonHeight, SWP_NOZORDER);
+            if (prompt->close) ::SetWindowPos (prompt->close, nullptr,
+                width - prompt->px (44), prompt->px (12), prompt->px (32), prompt->px (32), SWP_NOZORDER);
+            ::InvalidateRect (hwnd, nullptr, FALSE);
             return 0;
         }
-        case WM_GETMINMAXINFO:
+        case WM_NCHITTEST:
         {
-            auto* info = reinterpret_cast<MINMAXINFO*> (lp);
-            RECT minimum { 0, 0, 660, 220 };
-            ::AdjustWindowRectEx (&minimum,
-                WS_CAPTION | WS_SYSMENU | WS_THICKFRAME, FALSE,
-                WS_EX_DLGMODALFRAME | WS_EX_TOPMOST);
-            info->ptMinTrackSize.x = minimum.right - minimum.left;
-            info->ptMinTrackSize.y = minimum.bottom - minimum.top;
+            POINT point {GET_X_LPARAM (lp), GET_Y_LPARAM (lp)};
+            ::ScreenToClient (hwnd, &point);
+            RECT r {};
+            ::GetClientRect (hwnd, &r);
+            return point.y < prompt->px (54) && point.x < r.right - prompt->px (48) ? HTCAPTION : HTCLIENT;
+        }
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT:
+        case WM_PRINTCLIENT:
+        {
+            PAINTSTRUCT ps {};
+            HDC dc = msg == WM_PAINT ? ::BeginPaint (hwnd, &ps) : reinterpret_cast<HDC> (wp);
+            RECT r {};
+            ::GetClientRect (hwnd, &r);
+            ::FillRect (dc, &r, prompt->background);
+            HBRUSH border = ::CreateSolidBrush (color (theme.rule));
+            ::FrameRect (dc, &r, border);
+            RECT line {prompt->px (24), prompt->px (53), r.right - prompt->px (24), prompt->px (54)};
+            ::FillRect (dc, &line, border);
+            RECT input {prompt->px (24), prompt->px (94), r.right - prompt->px (24), prompt->px (134)};
+            ::FillRect (dc, &input, prompt->surface);
+            const bool focused = ::GetFocus () == prompt->edit;
+            HBRUSH inputBorder = ::CreateSolidBrush (color (focused ? theme.accent : theme.rule));
+            ::FrameRect (dc, &input, inputBorder);
+            ::DeleteObject (inputBorder);
+            ::DeleteObject (border);
+            ::SetBkMode (dc, TRANSPARENT);
+            ::SetTextColor (dc, color (theme.ink));
+            const auto old = ::SelectObject (dc, prompt->titleFont);
+            RECT title {prompt->px (24), prompt->px (12), r.right - prompt->px (52), prompt->px (44)};
+            ::DrawTextW (dc, L"打开网络视频", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            ::SelectObject (dc, old);
+            if (msg == WM_PAINT) ::EndPaint (hwnd, &ps);
             return 0;
+        }
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLOREDIT:
+        {
+            HDC dc = reinterpret_cast<HDC> (wp);
+            ::SetTextColor (dc, color (theme.ink));
+            ::SetBkColor (dc, color (msg == WM_CTLCOLOREDIT ? theme.surface : theme.paper));
+            return reinterpret_cast<LRESULT> (msg == WM_CTLCOLOREDIT ? prompt->surface : prompt->background);
+        }
+        case WM_DRAWITEM:
+        {
+            auto* item = reinterpret_cast<DRAWITEMSTRUCT*> (lp);
+            const bool close = item->CtlID == 4;
+            const bool pressed = (item->itemState & ODS_SELECTED) != 0;
+            HBRUSH fill = ::CreateSolidBrush (color (pressed ? theme.accentSoft : close ? theme.paper : theme.surface));
+            ::FillRect (item->hDC, &item->rcItem, fill);
+            ::DeleteObject (fill);
+            if (!close)
+            {
+                HBRUSH edge = ::CreateSolidBrush (color (item->CtlID == 2 && !(item->itemState & ODS_DISABLED) ? theme.accent : theme.rule));
+                ::FrameRect (item->hDC, &item->rcItem, edge);
+                ::DeleteObject (edge);
+            }
+            ::SetBkMode (item->hDC, TRANSPARENT);
+            ::SetTextColor (item->hDC, color (item->itemState & ODS_DISABLED ? theme.muted : theme.ink));
+            const auto old = ::SelectObject (item->hDC, close ? prompt->iconFont : prompt->font);
+            ::DrawTextW (item->hDC, close ? L"\xE8BB" : item->CtlID == 2 ? L"打开" : L"取消", -1,
+                &item->rcItem, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            ::SelectObject (item->hDC, old);
+            if (item->itemState & ODS_FOCUS)
+            {
+                RECT focus = item->rcItem;
+                ::InflateRect (&focus, -prompt->px (3), -prompt->px (3));
+                ::DrawFocusRect (item->hDC, &focus);
+            }
+            return TRUE;
         }
         case WM_COMMAND:
+            if (LOWORD (wp) == 1)
+            {
+                if (HIWORD (wp) == EN_CHANGE)
+                {
+                    wchar_t text[2048] {};
+                    ::GetWindowTextW (prompt->edit, text, 2048);
+                    ::EnableWindow (prompt->open, std::wstring (text).find_first_not_of (L" \t\r\n") != std::wstring::npos);
+                }
+                ::InvalidateRect (hwnd, nullptr, FALSE);
+                return 0;
+            }
             if (LOWORD (wp) == 2)
             {
                 wchar_t text[2048] = {};
                 ::GetWindowTextW (prompt->edit, text, 2048);
-                prompt->accepted = text[0] != L'\0';
-                if (prompt->accepted) *prompt->value = text;
+                const std::wstring url (text);
+                const auto first = url.find_first_not_of (L" \t\r\n");
+                if (first == std::wstring::npos) return 0;
+                *prompt->value = url.substr (first, url.find_last_not_of (L" \t\r\n") - first + 1);
+                prompt->accepted = true;
                 ::DestroyWindow (hwnd);
                 return 0;
             }
-            if (LOWORD (wp) == 3)
+            if (LOWORD (wp) == 3 || LOWORD (wp) == 4)
             {
                 ::DestroyWindow (hwnd);
                 return 0;
@@ -276,45 +371,65 @@ LRESULT CALLBACK videoUrlPromptProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return ::DefWindowProcW (hwnd, msg, wp, lp);
 }
 
-bool promptVideoUrl (HWND owner, std::wstring& value)
+bool promptVideoUrl (HWND owner, std::wstring& value, const ap::ui::Theme& theme,
+                     double scale, HFONT font, HFONT titleFont, HFONT iconFont)
 {
     WNDCLASSEXW wc {};
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = videoUrlPromptProc;
     wc.hInstance = ::GetModuleHandleW (nullptr);
     wc.hCursor = ::LoadCursorW (nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH> (COLOR_WINDOW + 1);
     wc.lpszClassName = kVideoUrlPromptClass;
     ::RegisterClassExW (&wc);
 
     RECT ownerRect {};
     ::GetWindowRect (owner, &ownerRect);
-    const DWORD style = WS_CAPTION | WS_SYSMENU | WS_THICKFRAME;
-    const DWORD exStyle = WS_EX_DLGMODALFRAME | WS_EX_TOPMOST;
-    const int clientWidth = 760;
-    const int clientHeight = 240;
-    RECT frame { 0, 0, clientWidth, clientHeight };
-    ::AdjustWindowRectEx (&frame, style, FALSE, exStyle);
-    const int width = frame.right - frame.left;
-    const int height = frame.bottom - frame.top;
+    const DWORD style = WS_POPUP | WS_CLIPCHILDREN;
+    const DWORD exStyle = WS_EX_DLGMODALFRAME;
+    VideoUrlPrompt prompt;
+    prompt.theme = theme;
+    prompt.scale = scale;
+    prompt.font = font;
+    prompt.titleFont = titleFont;
+    prompt.iconFont = iconFont;
+    const auto color = [] (unsigned rgb) { return RGB ((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255); };
+    prompt.background = ::CreateSolidBrush (color (theme.paper));
+    prompt.surface = ::CreateSolidBrush (color (theme.surface));
+    const int width = prompt.px (520);
+    const int height = prompt.px (220);
     const int ownerWidth = static_cast<int> (ownerRect.right - ownerRect.left);
     const int ownerHeight = static_cast<int> (ownerRect.bottom - ownerRect.top);
     const int x = static_cast<int> (ownerRect.left) + std::max (0, (ownerWidth - width) / 2);
     const int y = static_cast<int> (ownerRect.top) + std::max (0, (ownerHeight - height) / 2);
-    VideoUrlPrompt prompt;
     prompt.value = &value;
     prompt.window = ::CreateWindowExW (exStyle, kVideoUrlPromptClass,
         L"打开网络视频", style,
         x, y, width, height,
         owner, nullptr, wc.hInstance, &prompt);
-    if (!prompt.window) return false;
+    if (!prompt.window)
+    {
+        ::DeleteObject (prompt.background);
+        ::DeleteObject (prompt.surface);
+        return false;
+    }
 
     ::EnableWindow (owner, FALSE);
     ::ShowWindow (prompt.window, SW_SHOW);
     ::UpdateWindow (prompt.window);
+    ::SetFocus (prompt.edit);
     MSG msg {};
     while (::IsWindow (prompt.window) && ::GetMessageW (&msg, nullptr, 0, 0) > 0)
     {
+        if (msg.message == WM_KEYDOWN && (msg.hwnd == prompt.window || ::IsChild (prompt.window, msg.hwnd)))
+        {
+            if (msg.wParam == VK_ESCAPE || msg.wParam == VK_RETURN)
+            {
+                const int command = msg.wParam == VK_ESCAPE ? 3 :
+                    msg.hwnd == prompt.cancel ? 3 : msg.hwnd == prompt.close ? 4 : 2;
+                ::SendMessageW (prompt.window, WM_COMMAND, command, 0);
+                continue;
+            }
+        }
         if (!::IsDialogMessageW (prompt.window, &msg))
         {
             ::TranslateMessage (&msg);
@@ -323,6 +438,10 @@ bool promptVideoUrl (HWND owner, std::wstring& value)
     }
     ::EnableWindow (owner, TRUE);
     ::SetForegroundWindow (owner);
+    ::SetFocus (owner);
+    ::DeleteObject (prompt.background);
+    ::DeleteObject (prompt.surface);
+    if (msg.message == WM_QUIT) ::PostQuitMessage (static_cast<int> (msg.wParam));
     return prompt.accepted;
 }
 
@@ -524,6 +643,9 @@ public:
     bool helpVisible () const { return m_helpVisible; }
     void setCollapsed (bool collapsed);
     void paintFloating (HDC dc);
+    void layoutFloating ();
+    void moveFloatingVideo ();
+    void setVideoOpacity ();
     LRESULT floatingHitTest (POINT screen) const;
 
     // ---- 拍号设置弹层（点波形顶部拍号条上的方块后弹出）----
@@ -563,13 +685,14 @@ public:
     void onDropFiles (HDROP drop);
     void onCommand (int id, int notify);
     void onHScroll (HWND slider);
-    bool onNumericWheel (HWND control, int delta, bool fine);
+    bool onNumericWheel (HWND control, int delta, bool fine, bool coarse = false);
     void paintSlider (HWND slider, HDC dc);
     void paintTimeSigControl (HDC dc);
     void setVolumeAt (int x);
     void setProgressAt (int x);
     void finishProgress (bool cancel);
     bool onProgressKey (WPARAM key);
+    void onTempoClick (int x, int y);
     LRESULT onNotify (NMHDR* notification);
     void hoverControl (HWND control)
     {
@@ -604,6 +727,12 @@ private:
     void openFileDialog ();
     void openVideoFileDialog ();
     void openVideoUrlDialog ();
+    void loadAudio (const std::wstring& path);
+    void loadVideo (const std::wstring& target, bool local);
+    void closeMedia ();
+    void presentMedia ();
+    double mediaDuration () const;
+    double mediaPosition () const;
     void syncCurrentScore (bool showStatus);
     void applyNumericEdit (int id);
     void showThemeMenu ();
@@ -643,6 +772,8 @@ private:
     HWND m_hwnd = nullptr;
     HWND m_wave = nullptr;
     HWND m_floating = nullptr, m_expandBtn = nullptr, m_collapseBtn = nullptr;
+    HWND m_opacitySlider = nullptr;
+    int m_videoOpacity = 100;
     HWND m_editorShell = nullptr;
     bool m_collapsed = false, m_shellWasVisible = false;
     std::wstring m_floatingText;
@@ -667,7 +798,7 @@ private:
     bool m_tsPopupHasChange = false;
     std::vector<TsPopupBtn> m_tsPopupBtns;   ///< 按钮矩形（绘制与命中测试共用同一份）
     RECT m_tsPopupBox = { 0, 0, 0, 0 };      ///< 弹层面板矩形
-    HWND m_openBtn = nullptr, m_videoBtn = nullptr, m_zoomOut = nullptr, m_zoomIn = nullptr, m_zoomFit = nullptr;
+    HWND m_openBtn = nullptr, m_videoBtn = nullptr, m_closeMediaBtn = nullptr, m_zoomOut = nullptr, m_zoomIn = nullptr, m_zoomFit = nullptr;
     std::vector<HWND> m_spaceSyncControls;
     HWND m_backBtn = nullptr, m_helpBtn = nullptr, m_gridCheck = nullptr, m_numCheck = nullptr;
     HWND m_bpmEdit = nullptr, m_bpmUp = nullptr, m_bpmDown = nullptr;
@@ -688,8 +819,13 @@ private:
     std::wstring m_timeText, m_offsetText, m_sourceText, m_volumeText;
     std::wstring m_musicalText = L"--";
     std::wstring m_fileText, m_transportText, m_pitchText;
+    std::wstring m_detectedTempoText;
+    std::shared_ptr<const TempoResult> m_tempoResult;
+    double m_tempoPosition = -1;
     std::string m_displayedPath;
     std::unique_ptr<VideoView> m_videoView;
+    std::wstring m_videoTarget;
+    bool m_destroying = false;
 
     HFONT m_font = nullptr, m_fontSmall = nullptr, m_fontBold = nullptr, m_fontIcons = nullptr;
     HFONT m_fontHeading = nullptr, m_fontMono = nullptr, m_fontPosition = nullptr;
@@ -702,6 +838,7 @@ private:
     std::wstring m_meterText;
     int m_followControls = -1;
     std::string m_scoreSnapshot;
+    std::string m_scoreSession;
     DWORD m_lastScoreCheck = 0;
 
     PlugView* m_owner = nullptr;      ///< 宿主侧回调（DPI 变化时请求改窗口尺寸）
@@ -734,6 +871,8 @@ private:
     double m_lastVideoOffsetSec = 0.0;
     bool m_lastVideoPlaying = false;
     bool m_videoSyncInitialized = false;
+    VideoTimeline m_videoTimeline;
+    double m_videoScoreSec = 0.0;
 
     //---- 高 DPI ----
     double m_scale = 1.0;             ///< DPI 缩放系数（1.0 = 96 DPI）
@@ -908,7 +1047,7 @@ void WinView::deleteFonts ()
 
 void WinView::applyFontsToChildren ()
 {
-    const HWND normal[] = { m_openBtn, m_videoBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn, m_expandBtn,
+    const HWND normal[] = { m_openBtn, m_videoBtn, m_closeMediaBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn, m_expandBtn,
                             m_helpBtn, m_updateCheck, m_updateAction, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
                             m_gridCheck, m_numCheck, m_bpmEdit, m_bpmUp, m_bpmDown,
                             m_timesig, m_volSlider, m_progressSlider, m_offsetZero, m_offsetEdit, m_offsetDown, m_offsetUp,
@@ -955,12 +1094,13 @@ void WinView::onDpiChanged ()
     if (m_wave)
         ::InvalidateRect (m_wave, nullptr, FALSE);
 
-    if (m_floating)
+    if (m_floating && !m_videoView)
     {
         ::SetWindowPos (m_floating, nullptr, 0, 0, px (260), px (58), SWP_NOMOVE | SWP_NOZORDER);
         ::MoveWindow (m_expandBtn, px (220), px (11), px (32), px (36), TRUE);
         ::InvalidateRect (m_floating, nullptr, TRUE);
     }
+    if (m_floating && m_videoView) layoutFloating ();
 
     // 面板尺寸变了，请宿主重新调整窗口（宿主不理也没关系，只是面板被裁一点）。
     if (m_owner)
@@ -987,7 +1127,7 @@ bool WinView::create (HWND parent, int w, int h)
     icc.dwICC = ICC_BAR_CLASSES | ICC_STANDARD_CLASSES | ICC_UPDOWN_CLASS;
     ::InitCommonControlsEx (&icc);
 
-    applyTheme (m_backend ? m_backend->theme () : 0);
+    applyTheme (m_backend ? m_backend->theme () : ui::defaultTheme);
 
     m_hwnd = ::CreateWindowExW (0, kMainClass, L"",
                                 WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
@@ -1019,6 +1159,7 @@ bool WinView::create (HWND parent, int w, int h)
 
     m_openBtn   = mk (L"BUTTON", L"打开音频", BS_PUSHBUTTON, IDC_OPEN);
     m_videoBtn  = mk (L"BUTTON", L"打开视频", BS_PUSHBUTTON, IDC_OPEN_VIDEO);
+    m_closeMediaBtn = mk (L"BUTTON", L"关闭素材", BS_PUSHBUTTON, IDC_CLOSE_MEDIA);
     m_scoreBtn = mk (L"BUTTON", L"当前谱面", BS_PUSHBUTTON, IDC_LINK_SCORE);
     m_themeBtn = mk (L"BUTTON", L"", BS_PUSHBUTTON, IDC_THEME_BTN);
     m_followScoreCheck = mk (L"BUTTON", L"跟随谱面", BS_PUSHBUTTON, IDC_FOLLOW_SCORE);
@@ -1098,15 +1239,16 @@ bool WinView::create (HWND parent, int w, int h)
     };
     tip (m_helpBtn, L"使用指南与更新");
     tip (m_videoBtn, L"打开本地视频或网络视频（支持 Bilibili 等网页）");
+    tip (m_closeMediaBtn, L"关闭当前音频或视频");
     tip (m_updateCheck, L"检查 GitHub 正式发布的新版本");
     tip (m_updateAction, L"在插件内下载，校验后打开安装器；下载中可取消");
-    tip (m_collapseBtn, L"收起为悬浮条（音频继续同步）");
+    tip (m_collapseBtn, L"收起为悬浮窗（继续同步）");
     tip (m_zoomOut, L"缩小波形");
     tip (m_zoomIn, L"放大波形");
     tip (m_zoomFit, L"整曲全览");
     tip (m_backBtn, L"回到播放头并重新对齐");
     tip (m_offsetZero, L"清零起始偏移");
-    tip (m_offsetEdit, L"起始偏移（毫秒）；Ctrl 拖动波形时同步更新");
+    tip (m_offsetEdit, L"延迟（毫秒）；滚轮 10 ms，Ctrl + 滚轮 100 ms，Shift + 滚轮 1 ms");
     tip (m_offsetDown, L"偏移 -10 ms；Shift 为 -1 ms");
     tip (m_offsetUp, L"偏移 +10 ms；Shift 为 +1 ms");
     tip (m_volSlider, L"音量");
@@ -1129,7 +1271,7 @@ bool WinView::create (HWND parent, int w, int h)
     // 键盘焦点通常落在某个子控件上。给这些控件挂同一个轻量子类，保证
     // 编辑框、按钮、滑块和标签获得焦点时按空格仍能同步宿主播放/暂停。
     m_spaceSyncControls = {
-        m_openBtn, m_videoBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
+        m_openBtn, m_videoBtn, m_closeMediaBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
         m_helpBtn, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
         m_gridCheck, m_numCheck, m_bpmEdit, m_bpmUp, m_bpmDown, m_timesig,
         m_volSlider, m_progressSlider, m_offsetZero, m_offsetEdit, m_offsetDown, m_offsetUp, m_semitoneEdit, m_semitoneUp,
@@ -1166,18 +1308,21 @@ bool WinView::create (HWND parent, int w, int h)
 
 void WinView::destroy ()
 {
+    m_destroying = true;
+    if (m_hwnd) ::KillTimer (m_hwnd, IDC_TIMER_UI);
     m_updater.stop ();
     if (m_videoView)
     {
         m_videoView->close ();
         m_videoView.reset ();
+        if (m_backend) m_backend->setVideoAudio (nullptr);
     }
     // Restore only a shell that this view hid; never leave a hidden host dialog.
     if (m_collapsed && m_shellWasVisible && ::IsWindow (m_editorShell))
         ::ShowWindow (m_editorShell, SW_SHOWNOACTIVATE);
     m_collapsed = false;
     if (m_floating) ::DestroyWindow (m_floating);
-    m_floating = m_expandBtn = nullptr;
+    m_floating = m_expandBtn = m_opacitySlider = nullptr;
     if (m_hwnd)
     {
         ::KillTimer (m_hwnd, IDC_TIMER_UI);
@@ -1293,6 +1438,7 @@ void WinView::layoutChildren ()
     move (m_wave, l.wave);
     move (m_openBtn, l.open);
     move (m_videoBtn, l.video);
+    move (m_closeMediaBtn, l.closeMedia);
     move (m_scoreBtn, l.score);
     move (m_themeBtn, l.theme);
     move (m_followScoreCheck, l.followScore);
@@ -1328,6 +1474,38 @@ void WinView::layoutChildren ()
     move (m_timesig, {l.timeSig.x, l.timeSig.y, l.timeSig.w, 240});
     ::SendMessageW (m_timesig, CB_SETITEMHEIGHT, static_cast<WPARAM> (-1), px (26));
     ::SendMessageW (m_timesig, CB_SETITEMHEIGHT, 0, px (28));
+    presentMedia ();
+}
+
+void WinView::presentMedia ()
+{
+    const bool show = !m_helpVisible && !m_tsPopupVisible;
+    for (HWND control : {m_wave, m_gridCheck, m_numCheck, m_zoomOut, m_zoomIn, m_zoomFit})
+        ::ShowWindow (control, show && !m_videoView ? SW_SHOW : SW_HIDE);
+    for (HWND control : {m_semitoneEdit, m_semitoneUp, m_semitoneDown,
+                         m_centsEdit, m_centsUp, m_centsDown, m_pitchReset})
+        ::EnableWindow (control, !m_videoView);
+    if (!m_videoView) return;
+    if (m_collapsed) layoutFloating ();
+    else
+    {
+        const auto r = m_layout.wave;
+        m_videoView->present (m_hwnd, px (r.x), px (r.y), px (r.w), px (r.h), show);
+    }
+}
+
+double WinView::mediaDuration () const
+{
+    return m_videoView ? m_videoView->durationSec () : m_backend ? m_backend->durationSec () : 0.0;
+}
+
+double WinView::mediaPosition () const
+{
+    if (!m_backend) return 0.0;
+    if (!m_videoView) return m_backend->positionSec ();
+    const double seconds = std::max (0.0, m_videoScoreSec + m_backend->offsetSec ());
+    const double duration = mediaDuration ();
+    return duration > 0 ? std::min (seconds, duration) : seconds;
 }
 
 void WinView::paintChrome (HDC dc)
@@ -1400,6 +1578,36 @@ void WinView::paintChrome (HDC dc)
     text (L"ms", l.offsetUnit, m_fontSmall, kMuted);
     text (m_pitchText, l.pitchStatus, m_fontSmall, kMuted, DT_RIGHT);
     text (m_volumeText, l.volumeValue, m_fontSmall, kInk, DT_RIGHT);
+    text (m_detectedTempoText, l.detectedTempo, m_fontSmall, kAccent);
+    if (m_tempoResult && mediaDuration () > 0)
+    {
+        const auto box = l.tempoMap;
+        const double duration = mediaDuration ();
+        auto x = [&] (double t) { return px (box.x + box.w * std::clamp (t / duration, 0.0, 1.0)); };
+        HPEN tempoPen = ::CreatePen (PS_SOLID, std::max (1, px (2)), kAccent);
+        const auto previous = ::SelectObject (dc, tempoPen);
+        bool connected = false;
+        double end = -1;
+        for (const auto& segment : m_tempoResult->segments)
+        {
+            if (segment.bpm <= 0) { connected = false; continue; }
+            const int y = px (box.bottom () - 2 - (box.h - 4) *
+                std::clamp ((segment.bpm - 45) / 195, 0.0, 1.0));
+            if (!connected || segment.start > end + .01) ::MoveToEx (dc, x (segment.start), y, nullptr);
+            else ::LineTo (dc, x (segment.start), y);
+            ::LineTo (dc, std::max (x (segment.start) + 1, x (segment.end)), y);
+            connected = true;
+            end = segment.end;
+        }
+        ::SelectObject (dc, previous);
+        ::DeleteObject (tempoPen);
+        HPEN cursor = ::CreatePen (PS_SOLID, 1, kMuted);
+        const auto old = ::SelectObject (dc, cursor);
+        ::MoveToEx (dc, x (mediaPosition ()), px (box.y), nullptr);
+        ::LineTo (dc, x (mediaPosition ()), px (box.bottom ()));
+        ::SelectObject (dc, old);
+        ::DeleteObject (cursor);
+    }
 }
 
 bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
@@ -1502,16 +1710,17 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
     const bool primaryOpen = dis->CtlID == IDC_OPEN || dis->CtlID == IDC_OPEN_VIDEO;
     if (primaryOpen)
     {
-        fill = edge = kInk;
-        text = kSurface;
+        fill = kSurface;
+        edge = kRule;
     }
     if (hot)
     {
-        fill = edge = primaryOpen ? kMuted : kAccentSoft;
+        fill = kAccentSoft;
+        edge = primaryOpen ? kAccent : fill;
     }
     if (pressed)
     {
-        fill = edge = primaryOpen ? kMuted : kSoftRule;
+        fill = edge = kSoftRule;
     }
 
     RECT r = dis->rcItem;
@@ -1541,6 +1750,7 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
         case IDC_BACK_TO_SCORE: icon = L"\xE81D"; break;
         case IDC_HELP_BTN: icon = L"\xE897"; break;
         case IDC_HELP_CLOSE: icon = L"\xE8BB"; break;
+        case IDC_CLOSE_MEDIA: icon = L"\xE8BB"; break;
         case IDC_COLLAPSE: icon = L"\xE921"; break;
         case IDC_EXPAND: icon = L"\xE8A7"; break;
         case IDC_OFFSET_ZERO:
@@ -1556,16 +1766,6 @@ bool WinView::drawItem (const DRAWITEMSTRUCT* dis)
     }
     ::SetBkMode (dis->hDC, TRANSPARENT);
     ::SetTextColor (dis->hDC, (dis->itemState & ODS_DISABLED) ? kMuted : text);
-    if (dis->CtlID == IDC_OPEN)
-    {
-        RECT folder = r;
-        folder.left += px (10);
-        folder.right = folder.left + px (16);
-        ::SelectObject (dis->hDC, m_fontIcons);
-        ::DrawTextW (dis->hDC, L"\xE8E5", -1, &folder, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        r.left += px (30);
-        r.right -= px (4);
-    }
     ::SelectObject (dis->hDC, icon ? m_fontIcons : m_font);
     ::DrawTextW (dis->hDC, icon ? icon : label, -1, &r,
                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -1918,6 +2118,9 @@ void WinView::setCollapsed (bool collapsed)
                 anchor.left, anchor.top, px (260), px (58), owner, nullptr,
                 ::GetModuleHandleW (nullptr), this);
             if (!m_floating) return;
+            if (m_videoView)
+                ::SetWindowLongPtrW (m_floating, GWL_STYLE,
+                    WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN);
             m_expandBtn = ::CreateWindowExW (0, L"BUTTON", L"展开 MuseSync",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 px (220), px (11), px (32), px (36), m_floating,
@@ -1937,25 +2140,73 @@ void WinView::setCollapsed (bool collapsed)
         }
         MONITORINFO monitor {sizeof monitor};
         ::GetMonitorInfoW (::MonitorFromRect (&anchor, MONITOR_DEFAULTTONEAREST), &monitor);
-        // Keep the expand button under the collapse button, including after moving the editor.
-        const int x = std::clamp ((anchor.left + anchor.right) / 2 - px (220) - px (32) / 2, monitor.rcWork.left,
-                                  std::max (monitor.rcWork.left, monitor.rcWork.right - px (260)));
-        const int y = std::clamp ((anchor.top + anchor.bottom) / 2 - px (11) - px (36) / 2, monitor.rcWork.top,
-                                  std::max (monitor.rcWork.top, monitor.rcWork.bottom - px (58)));
         m_shellWasVisible = m_editorShell && ::IsWindowVisible (m_editorShell);
         m_floatingText = m_musicalText + L"  " + m_transportText + L"  " + m_timeText;
         m_collapsed = true;
+        const int floatingW = m_videoView ? 640 : 260;
+        const int floatingH = m_videoView ? 412 : 58;
+        ::SetWindowLongPtrW (m_floating, GWL_STYLE,
+            WS_POPUP | WS_CLIPCHILDREN | (m_videoView ? WS_THICKFRAME : 0));
+        ::SetWindowPos (m_floating, nullptr, 0, 0, px (floatingW), px (floatingH),
+                        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        if (m_videoView)
+        {
+            for (HWND control : {m_progressSlider, m_volSlider, m_offsetEdit, m_offsetDown, m_offsetUp})
+                ::SetParent (control, m_floating);
+            if (!m_opacitySlider)
+            {
+                m_opacitySlider = ::CreateWindowExW (0, TRACKBAR_CLASSW, L"不透明度",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | TBS_HORZ | TBS_NOTICKS,
+                    0, 0, 10, 10, m_floating, reinterpret_cast<HMENU> (IDC_VIDEO_OPACITY),
+                    ::GetModuleHandleW (nullptr), nullptr);
+                ::SendMessageW (m_opacitySlider, TBM_SETRANGE, TRUE, MAKELPARAM (20, 100));
+                ::SendMessageW (m_opacitySlider, TBM_SETPOS, TRUE, m_videoOpacity);
+                ::SetWindowSubclass (m_opacitySlider, spaceSyncSubclassProc, kSpaceSyncSubclassId,
+                                     reinterpret_cast<DWORD_PTR> (this));
+                TOOLINFOW tool {sizeof tool};
+                tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+                tool.hwnd = m_floating;
+                tool.uId = reinterpret_cast<UINT_PTR> (m_opacitySlider);
+                tool.lpszText = const_cast<wchar_t*> (L"视频悬浮窗不透明度");
+                ::SendMessageW (m_tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM> (&tool));
+            }
+            ::ShowWindow (m_opacitySlider, SW_SHOW);
+            layoutFloating ();
+            setVideoOpacity ();
+        }
+        else
+        {
+            ::SetWindowRgn (m_floating, nullptr, TRUE);
+            ::SetWindowLongPtrW (m_floating, GWL_EXSTYLE,
+                ::GetWindowLongPtrW (m_floating, GWL_EXSTYLE) & ~WS_EX_LAYERED);
+            ::ShowWindow (m_opacitySlider, SW_HIDE);
+            ::MoveWindow (m_expandBtn, px (220), px (11), px (32), px (36), TRUE);
+        }
         ::ShowWindow (m_hwnd, SW_HIDE);
         if (m_shellWasVisible) ::ShowWindow (m_editorShell, SW_HIDE);
         // Do not make an invisible test host (or a hidden host view) appear.
         const bool visible = m_shellWasVisible || (!m_editorShell && ::IsWindowVisible (root));
-        ::SetWindowPos (m_floating, HWND_TOPMOST, x, y, px (260), px (58),
+        // Use the actual toolbar position, including the video window's resize border.
+        RECT expand {}, window {};
+        ::GetWindowRect (m_expandBtn, &expand);
+        ::GetWindowRect (m_floating, &window);
+        const int x = window.left + (anchor.left + anchor.right - expand.left - expand.right) / 2;
+        const int y = window.top + (anchor.top + anchor.bottom - expand.top - expand.bottom) / 2;
+        const int placedX = std::clamp<LONG> (x, monitor.rcWork.left,
+            std::max (monitor.rcWork.left, monitor.rcWork.right - px (floatingW)));
+        const int placedY = std::clamp<LONG> (y, monitor.rcWork.top,
+            std::max (monitor.rcWork.top, monitor.rcWork.bottom - px (floatingH)));
+        ::SetWindowPos (m_floating, HWND_TOPMOST, placedX, placedY, px (floatingW), px (floatingH),
                         SWP_NOACTIVATE | (visible ? SWP_SHOWWINDOW : 0));
+        if (m_videoView) layoutFloating ();
     }
     else
     {
         m_collapsed = false;
         ::ShowWindow (m_floating, SW_HIDE);
+        for (HWND control : {m_progressSlider, m_volSlider, m_offsetEdit, m_offsetDown, m_offsetUp})
+            if (::GetParent (control) == m_floating) ::SetParent (control, m_hwnd);
+        layoutChildren ();
         ::ShowWindow (m_hwnd, SW_SHOW);
         if (m_shellWasVisible && ::IsWindow (m_editorShell))
         {
@@ -1969,9 +2220,93 @@ void WinView::setCollapsed (bool collapsed)
 
 LRESULT WinView::floatingHitTest (POINT screen) const
 {
+    for (HWND control : {m_expandBtn, m_progressSlider, m_opacitySlider,
+                         m_volSlider, m_offsetEdit, m_offsetDown, m_offsetUp})
+    {
+        if (!control || ::GetParent (control) != m_floating) continue;
+        RECT r {};
+        ::GetWindowRect (control, &r);
+        if (::PtInRect (&r, screen)) return HTCLIENT;
+    }
+    if (m_videoView)
+    {
+        RECT r {};
+        ::GetClientRect (m_floating, &r);
+        ::MapWindowPoints (m_floating, nullptr, reinterpret_cast<POINT*> (&r), 2);
+        const int border = px (6);
+        const bool left = screen.x < r.left + border, right = screen.x >= r.right - border;
+        const bool top = screen.y < r.top + border, bottom = screen.y >= r.bottom - border;
+        if (top) return left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP;
+        if (bottom) return left ? HTBOTTOMLEFT : right ? HTBOTTOMRIGHT : HTBOTTOM;
+        if (left) return HTLEFT;
+        if (right) return HTRIGHT;
+        const auto l = ui::arrangeVideoFloating (
+            static_cast<int> (std::lround ((r.right - r.left) / m_scale)),
+            static_cast<int> (std::lround ((r.bottom - r.top) / m_scale)));
+        if (screen.y >= r.top + px (l.video.y)) return HTTRANSPARENT;
+    }
     RECT expand {};
     ::GetWindowRect (m_expandBtn, &expand);
     return ::PtInRect (&expand, screen) ? HTCLIENT : HTCAPTION;
+}
+
+void WinView::layoutFloating ()
+{
+    if (!m_collapsed || !m_videoView || !m_floating) return;
+    RECT rc {};
+    ::GetClientRect (m_floating, &rc);
+    const auto l = ui::arrangeVideoFloating (
+        static_cast<int> (std::lround (rc.right / m_scale)),
+        static_cast<int> (std::lround (rc.bottom / m_scale)));
+    auto move = [this] (HWND control, ui::Rect r) {
+        if (control) ::MoveWindow (control, px (r.x), px (r.y), px (r.w), px (r.h), TRUE);
+    };
+    move (m_expandBtn, l.expand);
+    move (m_progressSlider, l.progress);
+    move (m_opacitySlider, l.opacity);
+    move (m_volSlider, l.volume);
+    move (m_offsetDown, {l.offset.x + 1, l.offset.y + 1, 24, 30});
+    move (m_offsetUp, {l.offset.right () - 25, l.offset.y + 1, 24, 30});
+    move (m_offsetEdit, {l.offset.x + 26, l.offset.y + 6, l.offset.w - 52, 20});
+    const auto r = l.video;
+    // Keep a resize frame around the mouse-transparent video cutout.
+    HRGN region = ::CreateRectRgn (0, 0, rc.right, rc.bottom);
+    HRGN cutout = ::CreateRectRgn (px (r.x), px (r.y), px (r.right ()), px (r.bottom ()));
+    if (region && cutout) ::CombineRgn (region, region, cutout, RGN_DIFF);
+    if (cutout) ::DeleteObject (cutout);
+    HRGN previous = ::CreateRectRgn (0, 0, 0, 0);
+    const bool unchanged = previous && ::GetWindowRgn (m_floating, previous) != ERROR &&
+        ::EqualRgn (region, previous);
+    if (previous) ::DeleteObject (previous);
+    if (region && (unchanged || !::SetWindowRgn (m_floating, region, TRUE))) ::DeleteObject (region);
+    m_videoView->present (m_floating, px (r.x), px (r.y), px (r.w), px (r.h),
+        ::IsWindowVisible (m_floating) != FALSE, true, m_videoOpacity);
+    ::InvalidateRect (m_floating, nullptr, FALSE);
+}
+
+void WinView::moveFloatingVideo ()
+{
+    if (!m_collapsed || !m_videoView || !m_floating) return;
+    RECT rc {};
+    ::GetClientRect (m_floating, &rc);
+    const auto l = ui::arrangeVideoFloating (
+        static_cast<int> (std::lround (rc.right / m_scale)),
+        static_cast<int> (std::lround (rc.bottom / m_scale)));
+    const auto r = l.video;
+    m_videoView->present (m_floating, px (r.x), px (r.y), px (r.w), px (r.h),
+        ::IsWindowVisible (m_floating) != FALSE, true, m_videoOpacity);
+}
+
+void WinView::setVideoOpacity ()
+{
+    if (!m_opacitySlider || !m_floating) return;
+    m_videoOpacity = static_cast<int> (::SendMessageW (m_opacitySlider, TBM_GETPOS, 0, 0));
+    ::SetWindowLongPtrW (m_floating, GWL_EXSTYLE,
+        ::GetWindowLongPtrW (m_floating, GWL_EXSTYLE) | WS_EX_LAYERED);
+    ::SetLayeredWindowAttributes (m_floating, 0,
+        static_cast<BYTE> (std::clamp (m_videoOpacity, 20, 100) * 255 / 100), LWA_ALPHA);
+    layoutFloating ();
+    ::InvalidateRect (m_floating, nullptr, FALSE);
 }
 
 void WinView::paintFloating (HDC dc)
@@ -1983,6 +2318,52 @@ void WinView::paintFloating (HDC dc)
     ::FrameRect (dc, &r, edge);
     ::DeleteObject (edge);
     ::SetBkMode (dc, TRANSPARENT);
+    if (m_videoView)
+    {
+        const auto l = ui::arrangeVideoFloating (
+            static_cast<int> (std::lround (r.right / m_scale)),
+            static_cast<int> (std::lround (r.bottom / m_scale)));
+        RECT videoFrame {px (l.video.x) - 1, px (l.video.y) - 1,
+                         px (l.video.right ()) + 1, px (l.video.bottom ()) + 1};
+        HBRUSH videoEdge = ::CreateSolidBrush (kRule);
+        ::FrameRect (dc, &videoFrame, videoEdge);
+        ::DeleteObject (videoEdge);
+        RECT position {px (l.position.x), px (l.position.y), px (l.position.right ()), px (l.position.bottom ())};
+        ::SelectObject (dc, m_fontPosition);
+        ::SetTextColor (dc, kAccent);
+        ::DrawTextW (dc, m_musicalText.c_str (), -1, &position,
+            DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        RECT time {px (l.time.x), px (l.time.y), px (l.time.right ()), px (l.time.bottom ())};
+        ::SelectObject (dc, m_fontMono);
+        ::SetTextColor (dc, kMuted);
+        ::DrawTextW (dc, m_timeText.c_str (), -1, &time,
+            DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        RECT icon {px (l.opacityIcon.x), px (l.opacityIcon.y), px (l.opacityIcon.right ()), px (l.opacityIcon.bottom ())};
+        ::SelectObject (dc, m_fontIcons);
+        ::SetTextColor (dc, kMuted);
+        ::DrawTextW (dc, L"\xE793", -1, &icon, DT_SINGLELINE | DT_VCENTER | DT_CENTER);
+        RECT value {px (l.opacityValue.x), px (l.opacityValue.y),
+                    px (l.opacityValue.right ()), px (l.opacityValue.bottom ())};
+        wchar_t opacity[16] {};
+        std::swprintf (opacity, 16, L"%d%%", m_videoOpacity);
+        ::SelectObject (dc, m_fontSmall);
+        ::DrawTextW (dc, opacity, -1, &value, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+        auto label = [&] (ui::Rect box, const wchar_t* text, HFONT font) {
+            RECT bounds {px (box.x), px (box.y), px (box.right ()), px (box.bottom ())};
+            ::SelectObject (dc, font);
+            ::DrawTextW (dc, text, -1, &bounds, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+        };
+        label (l.volumeIcon, L"\xE767", m_fontIcons);
+        label (l.volumeValue, m_volumeText.c_str (), m_fontSmall);
+        label (l.offsetLabel, L"\xE916", m_fontIcons);
+        label (l.offsetUnit, L"ms", m_fontSmall);
+        RECT offset {px (l.offset.x), px (l.offset.y), px (l.offset.right ()), px (l.offset.bottom ())};
+        ::FillRect (dc, &offset, m_inputBrush);
+        HBRUSH border = ::CreateSolidBrush (kRule);
+        ::FrameRect (dc, &offset, border);
+        ::DeleteObject (border);
+        return;
+    }
     ::SelectObject (dc, m_fontHeading);
     ::SetTextColor (dc, kInk);
     RECT title {px (14), px (7), px (112), px (28)};
@@ -2051,7 +2432,7 @@ void WinView::setHelp (bool on)
 void WinView::showControls (bool show)
 {
     const HWND all[] = {
-        m_wave, m_openBtn, m_videoBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
+        m_wave, m_openBtn, m_videoBtn, m_closeMediaBtn, m_scoreBtn, m_themeBtn, m_followScoreCheck, m_collapseBtn,
         m_helpBtn, m_zoomOut, m_zoomIn, m_zoomFit, m_backBtn,
         m_gridCheck, m_numCheck, m_bpmEdit, m_bpmUp, m_bpmDown, m_timesig,
         m_volSlider, m_progressSlider, m_offsetZero, m_offsetEdit, m_offsetDown, m_offsetUp, m_semitoneEdit, m_semitoneUp, m_semitoneDown,
@@ -2060,6 +2441,7 @@ void WinView::showControls (bool show)
     for (HWND h : all)
         if (h)
             ::ShowWindow (h, show ? SW_SHOW : SW_HIDE);
+    presentMedia ();
 }
 
 void WinView::paintHelp (HDC dc)
@@ -2810,6 +3192,7 @@ void WinView::centerViewOn (double sec)
 
 void WinView::onTimer ()
 {
+    if (m_destroying) return;
     refreshUpdates ();
     // 宿主容器窗口若装不下我们（老版本可能给了个 340 宽的窗口），先缩回去，
     // 否则右侧那排按钮会被父窗口裁掉 —— 那比界面窄更糟。
@@ -2909,7 +3292,7 @@ void WinView::onTimer ()
                      + tl.bpm * 37.0 + tl.scoreBpm * 41.0
                      + tl.beatsPerBar * 43.0 + tl.beatDenominator * 47.0
                      + tl.scoreBeats * 53.0 + tl.scoreDenominator * 59.0;
-    if (m_mousePaintPending || key != m_lastPaintKey)
+    if (!m_collapsed && !m_videoView && (m_mousePaintPending || key != m_lastPaintKey))
     {
         m_mousePaintPending = false;
         m_lastPaintKey = key;
@@ -2933,10 +3316,13 @@ void WinView::syncVideoToTimeline (bool force)
 {
     if (!m_videoView || !m_backend) return;
     const auto timeline = m_backend->hostTimeline ();
-    if (!timeline.playheadValid) return;
-
     const double offset = static_cast<double> (m_backend->offsetSec ());
-    const double videoSeconds = timeline.playheadSec + offset;
+    double selectionSeconds = 0.0;
+    const bool selectionValid = ap::readScoreSelection (
+        m_scoreSession, ap::scoreBridgeNowMs (), selectionSeconds);
+    m_videoScoreSec = m_videoTimeline.update (timeline.playheadSec, timeline.playheadValid,
+        timeline.playing, selectionValid, selectionSeconds);
+    const double videoSeconds = m_videoScoreSec + offset;
     const DWORD now = ::GetTickCount ();
     const bool initialized = m_videoSyncInitialized;
     const bool offsetChanged = initialized && std::fabs (offset - m_lastVideoOffsetSec) > 1e-4;
@@ -2954,7 +3340,8 @@ void WinView::syncVideoToTimeline (bool force)
     const bool stateChanged = !initialized || timeline.playing != m_lastVideoPlaying;
     if (!force && !jumped && !stateChanged && now - m_lastVideoSyncTick < 100) return;
 
-    m_videoView->sync (videoSeconds, timeline.playing, force || jumped);
+    m_videoView->sync (videoSeconds, timeline.playheadValid && timeline.playing,
+                       force || jumped);
     m_lastVideoSyncTick = now;
     m_lastVideoSyncSec = videoSeconds;
     m_lastVideoOffsetSec = offset;
@@ -2970,13 +3357,14 @@ void WinView::refreshLabels ()
     auto update = [this] (std::wstring& current, const std::wstring& next, ui::Rect box) {
         if (current == next) return;
         current = next;
+        if (m_collapsed && m_floating) ::InvalidateRect (m_floating, nullptr, FALSE);
         RECT r = {px (box.x), px (box.y), px (box.right ()), px (box.bottom ())};
         ::InvalidateRect (m_hwnd, &r, FALSE);
     };
     char buf[512];
 
-    const double duration = m_backend->durationSec ();
-    const bool hasProgress = m_backend->hasAudio () && duration > 0;
+    const double duration = mediaDuration ();
+    const bool hasProgress = (m_videoView || m_backend->hasAudio ()) && duration > 0;
     if (!hasProgress && m_progressDragging)
     {
         m_progressDragging = false;
@@ -2989,7 +3377,7 @@ void WinView::refreshLabels ()
         if (!m_progressDragging)
         {
             const int progress = hasProgress ? static_cast<int> (std::lround (
-                std::clamp (m_backend->positionSec () / duration, 0.0, 1.0) * 10000)) : 0;
+                std::clamp (mediaPosition () / duration, 0.0, 1.0) * 10000)) : 0;
             if (::SendMessageW (m_progressSlider, TBM_GETPOS, 0, 0) != progress)
             {
                 ::SendMessageW (m_progressSlider, TBM_SETPOS, FALSE, progress);
@@ -2998,11 +3386,40 @@ void WinView::refreshLabels ()
         }
     }
     const double position = m_progressDragging ? duration *
-        ::SendMessageW (m_progressSlider, TBM_GETPOS, 0, 0) / 10000.0 : m_backend->positionSec ();
+        ::SendMessageW (m_progressSlider, TBM_GETPOS, 0, 0) / 10000.0 : mediaPosition ();
     const std::string pos = formatTime (position);
     const std::string total = formatTime (duration);
     std::snprintf (buf, sizeof buf, "%s / %s", pos.c_str (), total.c_str ());
     update (m_timeText, utf8ToWide (buf), m_layout.time);
+    const auto analyzer = m_backend->tempoAnalyzer ();
+    const auto tempo = analyzer ? analyzer->snapshot () : nullptr;
+    std::wstring detected;
+    if (tempo && tempo->state != TempoResult::State::Empty)
+    {
+        const double bpm = tempo->bpmAt (position);
+        if (bpm > 0)
+        {
+            wchar_t value[64] {};
+            std::swprintf (value, 64, L"素材 ≈ %.1f BPM", bpm);
+            detected = value;
+        }
+        else detected = L"素材 BPM · 未识别";
+        if (tempo->state == TempoResult::State::Analyzing)
+            detected += L" · " + std::to_wstring (static_cast<int> (tempo->progress * 100)) + L"%";
+        else if (tempo->state == TempoResult::State::Live && bpm <= 0)
+            detected = L"素材 BPM · 等待连续音频";
+        else if (tempo->state == TempoResult::State::Error)
+            detected = L"素材 BPM · 音轨分析失败";
+    }
+    update (m_detectedTempoText, detected, m_layout.detectedTempo);
+    if (m_tempoResult != tempo || m_backend->hostTimeline ().playing || m_tempoPosition != position)
+    {
+        const auto r = m_layout.tempoMap;
+        RECT area {px (r.x), px (r.y), px (r.right ()), px (r.bottom ())};
+        ::InvalidateRect (m_hwnd, &area, FALSE);
+    }
+    m_tempoResult = tempo;
+    m_tempoPosition = position;
 
     wchar_t numeric[32];
     m_syncingControls = true;
@@ -3034,6 +3451,7 @@ void WinView::refreshLabels ()
     const bool follow = m_backend->followScore ();
     const auto grid = ap::resolveGridMetadata (*m_backend);
     const double scorePosition = m_progressDragging ? std::max (0.0, position - m_backend->offsetSec ()) :
+        m_videoView ? m_videoScoreSec :
         tl.playheadValid ? tl.playheadSec : std::max (0.0, position - m_backend->offsetSec ());
     const auto musical = ap::musicalPosition (grid, scorePosition);
     std::swprintf (numeric, 32, L"%d-%d", musical.bar, musical.beat);
@@ -3066,17 +3484,18 @@ void WinView::refreshLabels ()
         }
     }
 
-    const std::string path = m_backend->currentPath ();
+    const std::string path = m_videoView ? wideToUtf8 (m_videoTarget) : m_backend->currentPath ();
     if (m_displayedPath != path || m_fileText.empty ())
     {
         m_displayedPath = path;
         const std::wstring w = utf8ToWide (path);
         const size_t slash = w.find_last_of (L"\\/");
         const std::wstring name = (slash == std::wstring::npos) ? w : w.substr (slash + 1);
-        update (m_fileText, name.empty () ? L"未载入音频" : name, m_layout.file);
+        update (m_fileText, name.empty () ? L"未载入素材" : name, m_layout.file);
     }
+    ::EnableWindow (m_closeMediaBtn, m_videoView || m_backend->hasAudio ());
 
-    update (m_transportText, !m_backend->hasAudio () ? L"无音频" :
+    update (m_transportText, !m_videoView && !m_backend->hasAudio () ? L"无媒体" :
             tl.playing ? L"播放中" : L"已暂停", m_layout.transport);
 }
 
@@ -3156,6 +3575,12 @@ void WinView::syncCurrentScore (bool showStatus)
     ap::ScoreSyncSnapshot snapshot;
     std::string raw;
     const bool connected = ap::readScoreSyncSnapshot (nowMs, snapshot, raw);
+    const std::string session = connected ? snapshot.session : std::string {};
+    if (session != m_scoreSession)
+    {
+        m_scoreSession = session;
+        m_videoTimeline = {};
+    }
     if (connected)
     {
         m_backend->setLiveScoreMetadata (snapshot.bpm, snapshot.beats,
@@ -3257,19 +3682,9 @@ void WinView::onDropFiles (HDROP drop)
             if (::DragQueryFileW (drop, 0, path.data (), static_cast<UINT> (path.size ())) > 0)
             {
                 if (isVideoFile (path.data ()))
-                {
-                    if (!m_videoView) m_videoView = std::make_unique<VideoView> ();
-                    if (!m_videoView->openLocal (path.data ()))
-                        ::MessageBoxW (m_hwnd,
-                            L"无法打开此视频。请确认文件存在、格式受支持，并已安装 Microsoft Edge WebView2 Runtime。",
-                            L"MuseSync 视频", MB_OK | MB_ICONERROR);
-                    else syncVideoToTimeline (true);
-                }
+                    loadVideo (path.data (), true);
                 else if (m_backend)
-                {
-                    m_backend->loadFile (wideToUtf8 (path.data ()));
-                    afterLoad ();
-                }
+                    loadAudio (path.data ());
             }
         }
     }
@@ -3289,8 +3704,8 @@ void WinView::openFileDialog ()
 
     if (::GetOpenFileNameW (&ofn) && m_backend)
     {
-        m_backend->loadFile (wideToUtf8 (path));
-        afterLoad ();
+        if (isVideoFile (path)) loadVideo (path, true);
+        else loadAudio (path);
     }
 }
 
@@ -3305,27 +3720,99 @@ void WinView::openVideoFileDialog ()
     ofn.nMaxFile = MAX_PATH * 2;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (::GetOpenFileNameW (&ofn))
-    {
-        if (!m_videoView) m_videoView = std::make_unique<VideoView> ();
-        if (!m_videoView->openLocal (path))
-            ::MessageBoxW (m_hwnd,
-                L"无法打开此视频。请确认文件存在、格式受支持，并已安装 Microsoft Edge WebView2 Runtime。",
-                L"MuseSync 视频", MB_OK | MB_ICONERROR);
-        else syncVideoToTimeline (true);
-    }
+        loadVideo (path, true);
 }
 
 void WinView::openVideoUrlDialog ()
 {
     std::wstring url;
-    if (!promptVideoUrl (m_hwnd, url)) return;
-    if (!m_videoView) m_videoView = std::make_unique<VideoView> ();
-    if (!m_videoView->openUrl (url))
+    if (!promptVideoUrl (m_hwnd, url, ui::themes[ui::clampTheme (m_theme)],
+                         m_scale, m_font, m_fontBold, m_fontIcons)) return;
+    loadVideo (url, false);
+}
+
+void WinView::loadVideo (const std::wstring& target, bool local)
+{
+    if (!m_backend || m_destroying) return;
+    auto candidate = std::make_unique<VideoView> ();
+    if (!(local ? candidate->openLocal (target) : candidate->openUrl (target)))
+    {
         ::MessageBoxW (m_hwnd,
-            L"无法启动视频播放器。请检查网址是否以 http:// 或 https:// 开头，并确认已安装 Microsoft Edge WebView2 Runtime。\n\n"
-            L"部分网站的视频可能需要登录，或受到地区、嵌入策略及版权限制。",
+            L"无法打开视频。请检查文件或网址，并确认已安装 Microsoft Edge WebView2 Runtime。",
             L"MuseSync 视频", MB_OK | MB_ICONERROR);
-    else syncVideoToTimeline (true);
+        return;
+    }
+    if (m_collapsed) setCollapsed (false);
+    finishProgress (true);
+    if (m_videoView) m_videoView->close ();
+    m_backend->unloadFile ();
+    m_videoTarget = target;
+    m_videoView = std::move (candidate);
+    m_backend->setVideoAudio (m_videoView->audioStream ());
+    if (auto analyzer = m_backend->tempoAnalyzer ())
+    {
+        if (local)
+        {
+            const auto path = wideToUtf8 (target);
+            analyzer->decode ([path] (AudioData& audio, std::string& error,
+                                     const std::function<bool ()>& cancelled) {
+                const HRESULT init = ::CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+                struct ComScope {
+                    HRESULT init;
+                    ~ComScope () { if (SUCCEEDED (init)) ::CoUninitialize (); }
+                } scope {init};
+                return decodeAudioFileCancellable (path, audio, error, cancelled);
+            });
+        }
+        else
+        {
+            analyzer->startLive ();
+            m_videoView->setTempoAnalyzer (analyzer);
+        }
+    }
+    m_videoSyncInitialized = false;
+    m_videoTimeline = {};
+    syncCurrentScore (false);
+    presentMedia ();
+    syncVideoToTimeline (true);
+    refreshLabels ();
+}
+
+void WinView::loadAudio (const std::wstring& path)
+{
+    if (!m_backend || m_destroying) return;
+    if (!m_backend->loadFile (wideToUtf8 (path)))
+    {
+        ::MessageBoxW (m_hwnd, utf8ToWide (m_backend->lastError ()).c_str (),
+                       L"MuseSync 音频", MB_OK | MB_ICONERROR);
+        return;
+    }
+    if (m_collapsed) setCollapsed (false);
+    finishProgress (true);
+    if (m_videoView) m_videoView->close ();
+    m_videoView.reset ();
+    m_backend->setVideoAudio (nullptr);
+    m_videoTarget.clear ();
+    m_videoSyncInitialized = false;
+    presentMedia ();
+    afterLoad ();
+}
+
+void WinView::closeMedia ()
+{
+    if (!m_backend) return;
+    if (m_collapsed) setCollapsed (false);
+    finishProgress (true);
+    m_backend->setVideoAudio (nullptr);
+    if (m_videoView) m_videoView->close ();
+    m_videoView.reset ();
+    m_videoTarget.clear ();
+    m_videoSyncInitialized = false;
+    m_backend->unloadFile ();
+    m_hasPrevPlayhead = false;
+    presentMedia ();
+    refreshLabels ();
+    requestWaveRepaint (false);
 }
 
 void WinView::applyBpmFromEdit ()
@@ -3438,9 +3925,10 @@ void WinView::onHScroll (HWND slider)
     refreshLabels ();
 }
 
-bool WinView::onNumericWheel (HWND control, int delta, bool fine)
+bool WinView::onNumericWheel (HWND control, int delta, bool fine, bool coarse)
 {
-    if (!m_backend || !control || !::IsChild (m_hwnd, control)) return false;
+    if (!m_backend || !control || (!::IsChild (m_hwnd, control) &&
+        (!m_floating || !::IsChild (m_floating, control)))) return false;
     const int id = ::GetDlgCtrlID (control);
     if (id != IDC_SEMITONE_EDIT && id != IDC_CENTS_EDIT && id != IDC_BPM_EDIT &&
         id != IDC_OFFSET_EDIT && id != IDC_VOLUME_SLIDER) return false;
@@ -3465,7 +3953,7 @@ bool WinView::onNumericWheel (HWND control, int delta, bool fine)
         value = id == IDC_OFFSET_EDIT ? m_backend->offsetSec () * 1000.0 :
             id == IDC_SEMITONE_EDIT ? m_backend->semitones () : id == IDC_CENTS_EDIT ? m_backend->cents () :
             id == IDC_BPM_EDIT ? ap::resolveGridMetadata (*m_backend).bpm : m_backend->volume () * 100.0;
-    const double increment = id == IDC_OFFSET_EDIT ? (fine ? 1 : 10) : 1;
+    const double increment = id == IDC_OFFSET_EDIT ? (coarse ? 100 : fine ? 1 : 10) : 1;
     value = std::clamp (std::round (value) + steps * increment, min, max);
     m_syncingControls = true;
     std::swprintf (text, 64, L"%.0f", value);
@@ -3489,7 +3977,9 @@ void WinView::paintSlider (HWND slider, HDC dc)
     const int inset = px (8), mid = (r.top + r.bottom) / 2;
     const bool progress = slider == m_progressSlider;
     const int value = static_cast<int> (::SendMessageW (slider, TBM_GETPOS, 0, 0));
-    const int thumb = inset + (r.right - 2 * inset) * value / (progress ? 10000 : 100);
+    const bool opacity = slider == m_opacitySlider;
+    const int thumb = inset + (r.right - 2 * inset) *
+        (opacity ? value - 20 : value) / (progress ? 10000 : opacity ? 80 : 100);
     RECT track {inset, mid - px (2), r.right - inset, mid + px (2)};
     HBRUSH brush = ::CreateSolidBrush (kRule);
     ::FillRect (dc, &track, brush);
@@ -3563,7 +4053,7 @@ void WinView::setVolumeAt (int x)
 
 void WinView::seekFromAudio (double audioSec)
 {
-    if (!m_backend || !m_backend->hasAudio ()) return;
+    if (!m_backend || (!m_videoView && !m_backend->hasAudio ())) return;
     const double scoreSec = std::max (0.0, audioSec - m_backend->offsetSec ());
     if (!ap::requestScoreSeek (scoreSec, ap::scoreBridgeNowMs ()))
         ::MessageBoxW (m_hwnd,
@@ -3594,7 +4084,7 @@ void WinView::finishProgress (bool cancel)
 {
     if (!m_progressDragging) return;
     m_progressDragging = false;
-    const double target = m_backend->durationSec () *
+    const double target = mediaDuration () *
         ::SendMessageW (m_progressSlider, TBM_GETPOS, 0, 0) / 10000.0;
     if (::GetCapture () == m_progressSlider) ::ReleaseCapture ();
     // Commit once on release so the companion is not flooded while scrubbing.
@@ -3609,7 +4099,7 @@ bool WinView::onProgressKey (WPARAM key)
         key != VK_HOME && key != VK_END && key != VK_PRIOR && key != VK_NEXT) return false;
     if (!m_backend || !::IsWindowEnabled (m_progressSlider)) return true;
     const int step = static_cast<int> (std::lround (std::clamp (
-        10000 / m_backend->durationSec (), 1.0, 10000.0)));
+        10000 / mediaDuration (), 1.0, 10000.0)));
     int value = static_cast<int> (::SendMessageW (m_progressSlider, TBM_GETPOS, 0, 0));
     if (key == VK_HOME) value = 0;
     else if (key == VK_END) value = 10000;
@@ -3619,6 +4109,14 @@ bool WinView::onProgressKey (WPARAM key)
     m_progressDragging = true;
     finishProgress (false);
     return true;
+}
+
+void WinView::onTempoClick (int x, int y)
+{
+    const auto box = m_layout.tempoMap;
+    const double dx = x / m_scale, dy = y / m_scale;
+    if (dx >= box.x && dx < box.right () && dy >= box.y && dy < box.bottom () && mediaDuration () > 0)
+        seekFromAudio ((dx - box.x) / box.w * mediaDuration ());
 }
 
 LRESULT WinView::onNotify (NMHDR* notification)
@@ -3733,9 +4231,26 @@ static LRESULT CALLBACK spaceSyncSubclassProc (HWND hwnd, UINT msg, WPARAM wp, L
         if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS || msg == WM_ENABLE)
             ::InvalidateRect (hwnd, nullptr, FALSE);
     }
-    if (v && (controlId == IDC_VOLUME_SLIDER || controlId == IDC_PROGRESS_SLIDER))
+    if (v && (controlId == IDC_VOLUME_SLIDER || controlId == IDC_PROGRESS_SLIDER ||
+              controlId == IDC_VIDEO_OPACITY))
     {
         const bool progress = controlId == IDC_PROGRESS_SLIDER;
+        const bool opacity = controlId == IDC_VIDEO_OPACITY;
+        auto setAt = [&] (int x) {
+            if (progress) v->setProgressAt (x);
+            else if (opacity)
+            {
+                RECT bounds {};
+                ::GetClientRect (hwnd, &bounds);
+                const int inset = scaledOf (8);
+                const int value = std::clamp (20 + static_cast<int> (std::lround (
+                    80.0 * (x - inset) / std::max (1L, bounds.right - 2 * inset))), 20, 100);
+                ::SendMessageW (hwnd, TBM_SETPOS, TRUE, value);
+                v->setVideoOpacity ();
+                ::InvalidateRect (hwnd, nullptr, FALSE);
+            }
+            else v->setVolumeAt (x);
+        };
         if (msg == WM_PAINT)
         {
             PAINTSTRUCT ps {};
@@ -3759,14 +4274,12 @@ static LRESULT CALLBACK spaceSyncSubclassProc (HWND hwnd, UINT msg, WPARAM wp, L
             if (!::IsWindowEnabled (hwnd)) return 0;
             ::SetFocus (hwnd);
             ::SetCapture (hwnd);
-            if (progress) v->setProgressAt (GET_X_LPARAM (lp));
-            else v->setVolumeAt (GET_X_LPARAM (lp));
+            setAt (GET_X_LPARAM (lp));
             return 0;
         }
         if (msg == WM_MOUSEMOVE && ::GetCapture () == hwnd)
         {
-            if (progress) v->setProgressAt (GET_X_LPARAM (lp));
-            else v->setVolumeAt (GET_X_LPARAM (lp));
+            setAt (GET_X_LPARAM (lp));
             return 0;
         }
         if (msg == WM_LBUTTONUP && ::GetCapture () == hwnd)
@@ -3778,7 +4291,7 @@ static LRESULT CALLBACK spaceSyncSubclassProc (HWND hwnd, UINT msg, WPARAM wp, L
             }
             else
             {
-                v->setVolumeAt (GET_X_LPARAM (lp));
+                setAt (GET_X_LPARAM (lp));
                 ::ReleaseCapture ();
             }
             return 0;
@@ -3790,9 +4303,10 @@ static LRESULT CALLBACK spaceSyncSubclassProc (HWND hwnd, UINT msg, WPARAM wp, L
     {
         POINT point {GET_X_LPARAM (lp), GET_Y_LPARAM (lp)};
         HWND target = ::WindowFromPoint (point);
-        if (!target || !::IsChild (v->hwnd (), target)) target = hwnd;
+        if (!target || (::GetAncestor (target, GA_ROOT) != ::GetAncestor (hwnd, GA_ROOT))) target = hwnd;
         if (v->onNumericWheel (target, GET_WHEEL_DELTA_WPARAM (wp),
-                               (GET_KEYSTATE_WPARAM (wp) & MK_SHIFT) != 0)) return 0;
+                               (GET_KEYSTATE_WPARAM (wp) & MK_SHIFT) != 0,
+                               (GET_KEYSTATE_WPARAM (wp) & MK_CONTROL) != 0)) return 0;
     }
     if (v && msg == WM_MOUSEMOVE)
     {
@@ -3812,6 +4326,48 @@ static LRESULT CALLBACK spaceSyncSubclassProc (HWND hwnd, UINT msg, WPARAM wp, L
             return 0;
         }
     }
+    const bool numeric = controlId == IDC_BPM_EDIT || controlId == IDC_SEMITONE_EDIT ||
+        controlId == IDC_CENTS_EDIT || controlId == IDC_OFFSET_EDIT;
+    auto validReplacement = [&] (const std::wstring& inserted) {
+        wchar_t text[64] {};
+        ::GetWindowTextW (hwnd, text, 64);
+        DWORD start = 0, end = 0;
+        ::SendMessageW (hwnd, EM_GETSEL, reinterpret_cast<WPARAM> (&start), reinterpret_cast<LPARAM> (&end));
+        std::wstring proposed (text);
+        proposed.replace (std::min<size_t> (start, proposed.size ()), end - start, inserted);
+        if (controlId == IDC_BPM_EDIT && proposed.find_first_not_of (L"0123456789") != std::wstring::npos)
+            return false;
+        return ui::numericDraft (proposed.c_str ());
+    };
+    if (numeric && msg == WM_GETDLGCODE)
+        return ::DefSubclassProc (hwnd, msg, wp, lp) | DLGC_WANTALLKEYS;
+    // TranslateMessage queues WM_CHAR before the key handler changes focus.
+    // Consume it too, so the single-line EDIT cannot beep or insert a space.
+    if (numeric && msg == WM_CHAR)
+    {
+        if (wp == VK_RETURN || wp == VK_ESCAPE || wp == VK_SPACE) return 0;
+        if (wp >= 32 && !validReplacement (std::wstring (1, static_cast<wchar_t> (wp))))
+            return 0;
+    }
+    if (numeric && msg == WM_PASTE)
+    {
+        bool valid = false;
+        if (::OpenClipboard (hwnd))
+        {
+            if (HANDLE data = ::GetClipboardData (CF_UNICODETEXT))
+            {
+                if (const auto* text = static_cast<const wchar_t*> (::GlobalLock (data)))
+                {
+                    double value = 0;
+                    valid = ui::parseNumericInput (text, -3600000, 3600000, value) && validReplacement (text);
+                    ::GlobalUnlock (data);
+                }
+            }
+            ::CloseClipboard ();
+        }
+        if (!valid) return 0;
+    }
+    if (msg == WM_CHAR && wp == VK_SPACE) return 0;
     if ((msg == WM_KEYDOWN || msg == WM_KEYUP) && wp == VK_SPACE)
     {
         if (msg == WM_KEYDOWN)
@@ -3827,6 +4383,9 @@ void WinView::onCommand (int id, int notify)
 {
     switch (id)
     {
+        case IDC_CLOSE_MEDIA:
+            closeMedia ();
+            break;
         case IDC_UPDATE_CHECK:
             m_updater.check ();
             refreshUpdates ();
@@ -3835,24 +4394,8 @@ void WinView::onCommand (int id, int notify)
             updateAction ();
             break;
         case IDC_OPEN:
-        {
-            HMENU menu = ::CreatePopupMenu ();
-            if (!menu) { openFileDialog (); break; }
-            ::AppendMenuW (menu, MF_STRING, IDC_OPEN, L"打开音频文件...");
-            ::AppendMenuW (menu, MF_SEPARATOR, 0, nullptr);
-            ::AppendMenuW (menu, MF_STRING, IDC_OPEN_VIDEO_LOCAL, L"打开本地视频...");
-            ::AppendMenuW (menu, MF_STRING, IDC_OPEN_VIDEO_URL, L"打开网络视频...");
-            RECT rc {};
-            ::GetWindowRect (m_openBtn, &rc);
-            const int choice = static_cast<int> (::TrackPopupMenu (menu,
-                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_TOPALIGN, rc.left, rc.bottom,
-                0, m_hwnd, nullptr));
-            ::DestroyMenu (menu);
-            if (choice == IDC_OPEN) openFileDialog ();
-            else if (choice == IDC_OPEN_VIDEO_LOCAL) openVideoFileDialog ();
-            else if (choice == IDC_OPEN_VIDEO_URL) openVideoUrlDialog ();
+            openFileDialog ();
             break;
-        }
         case IDC_OPEN_VIDEO:
         {
             HMENU menu = ::CreatePopupMenu ();
@@ -3911,6 +4454,7 @@ void WinView::onCommand (int id, int notify)
             requestWaveRepaint (false);
             break;
         case IDC_BACK_TO_SCORE:
+            if (m_videoView) syncVideoToTimeline (true);
             if (m_backend && m_backend->hasAudio ())
             {
                 const PlugView::Backend::HostTimeline tl = m_backend->hostTimeline ();
@@ -4082,6 +4626,9 @@ LRESULT CALLBACK floatingProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     WinView* v = viewOf (hwnd);
     switch (msg)
     {
+        // Keep the resize style/hit targets without the system's white non-client frame.
+        case WM_NCCALCSIZE:
+            return 0;
         case WM_PAINT:
         {
             PAINTSTRUCT ps {};
@@ -4095,14 +4642,43 @@ LRESULT CALLBACK floatingProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return 0;
         case WM_NCHITTEST:
             return v ? v->floatingHitTest (POINT {GET_X_LPARAM (lp), GET_Y_LPARAM (lp)}) : HTCLIENT;
+        case WM_SIZE:
+            if (v) v->layoutFloating ();
+            return 0;
+        case WM_MOVE:
+            if (v) v->moveFloatingVideo ();
+            return 0;
+        case WM_GETMINMAXINFO:
+        {
+            auto* info = reinterpret_cast<MINMAXINFO*> (lp);
+            const bool video = (::GetWindowLongPtrW (hwnd, GWL_STYLE) & WS_THICKFRAME) != 0;
+            info->ptMinTrackSize = video ? POINT {scaledOf (280), scaledOf (180)} :
+                                          POINT {scaledOf (260), scaledOf (58)};
+            return 0;
+        }
+        case WM_HSCROLL:
+            if (v && LOWORD (::GetDlgCtrlID (reinterpret_cast<HWND> (lp))) == IDC_VIDEO_OPACITY)
+                v->setVideoOpacity ();
+            else if (v) v->onHScroll (reinterpret_cast<HWND> (lp));
+            return 0;
         case WM_NCLBUTTONDBLCLK:
         case WM_LBUTTONDBLCLK:
         case WM_CLOSE:
             if (v) v->setCollapsed (false);
             return 0;
         case WM_COMMAND:
-            if (v && LOWORD (wp) == IDC_EXPAND) v->setCollapsed (false);
+            if (v) v->onCommand (LOWORD (wp), HIWORD (wp));
             return 0;
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORSTATIC:
+            if (v) return reinterpret_cast<LRESULT> (v->onCtlColor (
+                reinterpret_cast<HDC> (wp), reinterpret_cast<HWND> (lp)));
+            break;
+        case WM_MOUSEWHEEL:
+            if (v && v->onNumericWheel (::WindowFromPoint ({GET_X_LPARAM (lp), GET_Y_LPARAM (lp)}),
+                GET_WHEEL_DELTA_WPARAM (wp), (GET_KEYSTATE_WPARAM (wp) & MK_SHIFT) != 0,
+                (GET_KEYSTATE_WPARAM (wp) & MK_CONTROL) != 0)) return 0;
+            break;
         case WM_DRAWITEM:
             if (v && v->drawItem (reinterpret_cast<const DRAWITEMSTRUCT*> (lp))) return TRUE;
             break;
@@ -4161,7 +4737,8 @@ LRESULT CALLBACK waveProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             {
                 const POINT point {GET_X_LPARAM (lp), GET_Y_LPARAM (lp)};
                 if (v->onNumericWheel (::WindowFromPoint (point), GET_WHEEL_DELTA_WPARAM (wp),
-                                       (GET_KEYSTATE_WPARAM (wp) & MK_SHIFT) != 0)) return 0;
+                                       (GET_KEYSTATE_WPARAM (wp) & MK_SHIFT) != 0,
+                                       (GET_KEYSTATE_WPARAM (wp) & MK_CONTROL) != 0)) return 0;
                 v->onWheelDelta (GET_WHEEL_DELTA_WPARAM (wp), modsNow (), false);
             }
             return 0;
@@ -4317,6 +4894,8 @@ LRESULT CALLBACK mainProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 if (msg == WM_LBUTTONDOWN && ::PtInRect (&close, point)) v->hideHelp ();
                 return 0;
             }
+            if (v && msg == WM_LBUTTONDOWN)
+                v->onTempoClick (GET_X_LPARAM (lp), GET_Y_LPARAM (lp));
             break;
         case WM_MOUSEWHEEL:
         case WM_MOUSEHWHEEL:
@@ -4341,7 +4920,8 @@ LRESULT CALLBACK mainProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 const int sy = GET_Y_LPARAM (lp);
                 if (msg == WM_MOUSEWHEEL && v->onNumericWheel (
                     ::WindowFromPoint (POINT {sx, sy}), GET_WHEEL_DELTA_WPARAM (wp),
-                    (GET_KEYSTATE_WPARAM (wp) & MK_SHIFT) != 0)) return 0;
+                    (GET_KEYSTATE_WPARAM (wp) & MK_SHIFT) != 0,
+                    (GET_KEYSTATE_WPARAM (wp) & MK_CONTROL) != 0)) return 0;
                 if (v->waveHitTest (sx, sy))
                 {
                     v->onWheelDelta (GET_WHEEL_DELTA_WPARAM (wp), modsNow (),

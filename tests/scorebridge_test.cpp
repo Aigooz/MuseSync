@@ -1,4 +1,5 @@
 #include "scorebridge.h"
+#include "video_timeline.h"
 
 #include <cmath>
 #include <cstdio>
@@ -16,6 +17,24 @@ int main ()
     try
     {
         ap::ScoreSyncSnapshot snapshot;
+        double selection = -1;
+        check (ap::parseScoreSelection ("MP1|1000|1000-1|12.375", "1000-1", 2000, selection) &&
+               selection == 12.375, "paused selection position");
+        for (const auto* value : {"MP1|1000|1000-1|-1", "MP1|1000|1000-1|nan",
+             "MP1|1000|1000-1|86401", "MP1|1000|other|1", "MP1|2001|1000-1|1",
+             "MP1|1000|1000-1|1|extra", "MP1|1000|1000-1|", "MP1|-1|1000-1|1"})
+            check (!ap::parseScoreSelection (value, "1000-1", 2000, selection), "invalid selection accepted");
+        check (!ap::parseScoreSelection ("MP1|1000|1000-1|1", "1000-1", 16001, selection),
+               "stale selection rejected");
+        ap::VideoTimeline video;
+        check (video.update (1, true, false, true, 2) == 2, "initial stopped selection");
+        check (video.update (1, true, false, true, 3) == 3, "selection seeks with unchanged paused host");
+        check (video.update (4, true, true, true, 3) == 4, "playback uses host instead of old selection");
+        check (video.update (5, true, false, true, 3) == 5, "pause does not jump back to old selection");
+        check (video.update (5, true, false, true, 6) == 6, "new paused selection follows immediately");
+        check (video.update (7, true, false, true, 6) == 7, "native host seek supersedes selection");
+        check (video.update (7, true, false, true, 8) == 8, "another selected measure");
+        check (video.update (7, true, false, false, 0) == 7, "expired bridge selection cleared");
         check (ap::parseScoreSyncSnapshot ("MT1|1000|90.000000|7|8|3,3,4;4,4,4", 2000, snapshot), "valid snapshot");
         check (snapshot.bpm == 90 && snapshot.beats == 7 && snapshot.denominator == 8 &&
                snapshot.timeSigChanges.size () == 2, "snapshot metadata");

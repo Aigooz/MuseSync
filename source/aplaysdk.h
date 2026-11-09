@@ -89,6 +89,8 @@ public:
     double durationSec () const override;
     std::string currentPath () const override;
     std::string lastError () const override;
+    void setVideoAudio (std::shared_ptr<ap::VideoAudioStream> stream) override;
+    std::shared_ptr<ap::TempoAnalyzer> tempoAnalyzer () const override { return m_tempo; }
     void waveformPeaks (std::vector<float>& out, int buckets,
                         double fromSec, double toSec) const override;
     void setOffsetSec (float sec) override;
@@ -153,6 +155,8 @@ private:
     std::atomic<double> m_hostSampleRate {44100.0};
     bool m_setupPending = false;
     ap::Player m_player;
+    std::shared_ptr<ap::TempoAnalyzer> m_tempo = std::make_shared<ap::TempoAnalyzer> ();
+    std::shared_ptr<ap::VideoAudioStream> m_videoAudio;
     std::string m_filePath;
     std::string m_loadError;
     bool m_loadedOk = false;
@@ -171,7 +175,7 @@ private:
     int   m_gridBeats = 4;
     int   m_gridBeatDenominator = 4;   ///< 拍号分母 M（2/4/8/16）
     std::atomic<bool> m_followScore {true};
-    std::atomic<int> m_theme {0};
+    std::atomic<int> m_theme {1};
     std::string m_scorePath;
     std::atomic<float> m_scoreBPM {0.0f};
     std::atomic<int> m_scoreBeats {0}, m_scoreDenominator {4};

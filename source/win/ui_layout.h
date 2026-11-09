@@ -20,7 +20,8 @@ struct Layout
 {
     int width, height, parametersY;
     Rect file, transport, time, progress, musicalPosition, wave;
-    Rect open, video, score, theme, help, collapse, followScore, grid, numbers, zoomOut, zoomIn, zoomFit, follow;
+    Rect detectedTempo, tempoMap;
+    Rect open, video, closeMedia, score, theme, help, collapse, followScore, grid, numbers, zoomOut, zoomIn, zoomFit, follow;
     Rect sync, pitch, volume;
     Rect syncTitle, pitchTitle, bpmLabel, bpmSource, timeSigLabel, offsetLabel;
     Rect semitoneLabel, centsLabel, volumeLabel;
@@ -32,6 +33,38 @@ struct GuideLayout
 {
     Rect title, close, sections[6], about, credit, updateStatus, updateCheck, updateAction, updateProgress;
 };
+
+struct VideoFloatingLayout
+{
+    Rect position, progress, opacityIcon, opacity, opacityValue, expand, video, time;
+    Rect volumeIcon, volume, volumeValue, offsetLabel, offset, offsetUnit;
+};
+
+inline VideoFloatingLayout arrangeVideoFloating (int width, int height)
+{
+    const int w = std::max (280, width), h = std::max (180, height);
+    VideoFloatingLayout l {};
+    if (w < 560)
+        l = {{8, 4, 80, 28}, {148, 38, w - 156, 22},
+                {w - 180, 4, 20, 28}, {w - 156, 4, 60, 28}, {w - 92, 4, 40, 28},
+                {w - 40, 4, 32, 32}, {6, 104, w - 12, h - 110}, {8, 38, 132, 22}};
+    else {
+    const int timelineWidth = std::min (360, w - 300);
+    const int timelineX = 100 + (w - 300 - timelineWidth) / 2;
+    l = {{10, 10, 80, 32}, {timelineX, 26, timelineWidth, 18},
+            {w - 190, 10, 20, 32}, {w - 166, 10, 70, 32}, {w - 92, 10, 40, 32},
+            {w - 42, 8, 32, 36}, {6, 88, w - 12, h - 94}, {timelineX, 4, timelineWidth, 20}};
+    }
+    const int y = l.video.y - 38;
+    const int volumeWidth = std::min (120, w - 254);
+    l.volumeIcon = {8, y, 20, 32};
+    l.volume = {30, y, volumeWidth, 32};
+    l.volumeValue = {l.volume.right () + 2, y, 40, 32};
+    l.offsetLabel = {w - 180, y, 20, 32};
+    l.offset = {w - 156, y, 124, 32};
+    l.offsetUnit = {w - 28, y, 20, 32};
+    return l;
+}
 
 inline GuideLayout arrangeGuide (int width, int height)
 {
@@ -59,8 +92,9 @@ inline Layout arrange (int width, int height)
     l.height = std::max (minHeight, height);
     l.parametersY = l.height - 164;
 
-    l.file = {160, 12, l.width - 530, 23};
+    l.file = {160, 12, l.width - 566, 23};
     l.transport = {160, 37, l.file.w, 18};
+    l.closeMedia = {l.width - 406, 16, 28, 32};
     l.score = {l.width - 370, 16, 78, 32};
     l.open = {l.width - 284, 16, 78, 32};
     l.video = {l.width - 198, 16, 78, 32};
@@ -77,7 +111,9 @@ inline Layout arrange (int width, int height)
     l.zoomIn = {l.width - 128, 66, 32, 28};
     l.zoomFit = {l.width - 92, 66, 32, 28};
     l.follow = {l.width - 56, 66, 36, 28};
-    l.wave = {20, 100, l.width - 40, l.parametersY - 116};
+    l.detectedTempo = {20, 100, 228, 36};
+    l.tempoMap = {260, 104, l.width - 280, 28};
+    l.wave = {20, 144, l.width - 40, l.parametersY - 160};
 
     // Keep the parameter band balanced without stretching controls on wide hosts.
     const int parametersWidth = std::min (l.width - 40, 864);

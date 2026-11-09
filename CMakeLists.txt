@@ -28,7 +28,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 # Keep the build target and bundle path stable for existing host references.
-project(MuseTone VERSION 2.4.2 LANGUAGES C CXX)
+project(MuseTone VERSION 2.5.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -105,6 +105,8 @@ add_subdirectory("${VST3_SDK_DIR}" "${CMAKE_BINARY_DIR}/vst3sdk")
 set(AP_SOURCES
     source/player.cpp        # 播放核心（纯 C++，跨平台）
     source/pitchshift.cpp    # 固定时长离线变调
+    source/tempo.cpp
+    source/third_party/minibpm/MiniBpm.cpp
     source/scorebridge.cpp
     source/aplaysdk.cpp      # VST3 处理器 / 控制器 / 工厂（纯 C++）
     # Ogg Vorbis 解码 —— 三端系统框架都没有 Vorbis，所以三端都得自带这一份。
@@ -202,7 +204,7 @@ if(WIN32)
         dbghelp
         ole32 oleaut32 uuid
         user32 gdi32 comctl32 comdlg32 shell32)
-    target_link_libraries(MuseTone PRIVATE xmllite shlwapi winhttp bcrypt)
+    target_link_libraries(MuseTone PRIVATE xmllite shlwapi winhttp bcrypt crypt32)
 elseif(APPLE)
     target_link_libraries(MuseTone PRIVATE
         "-framework AVFoundation"
@@ -250,6 +252,14 @@ endif()
 #------------------------------------------------------------------------------
 if(MUSETONE_BUILD_TESTS)
     enable_testing()
+    add_executable(musesync_tempo_test tests/tempo_test.cpp source/tempo.cpp
+        source/third_party/minibpm/MiniBpm.cpp)
+    target_include_directories(musesync_tempo_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/source")
+    if(UNIX)
+        find_package(Threads REQUIRED)
+        target_link_libraries(musesync_tempo_test PRIVATE Threads::Threads)
+    endif()
+    add_test(NAME musesync_tempo_test COMMAND musesync_tempo_test)
     add_executable(musetone_pitchshift_test
         tests/pitchshift_test.cpp
         source/pitchshift.cpp)
@@ -268,6 +278,8 @@ if(MUSETONE_BUILD_TESTS)
     if(MUSETONE_NODE_EXECUTABLE)
         add_test(NAME musetone_score_snapshot_test
             COMMAND "${MUSETONE_NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/score_snapshot_test.cjs")
+        add_test(NAME musesync_video_script_test
+            COMMAND "${MUSETONE_NODE_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/video_script_test.cjs")
     endif()
     if(WIN32)
         add_executable(musetone_sync_test tests/sync_test.cpp ${AP_SOURCES}
@@ -279,7 +291,7 @@ if(MUSETONE_BUILD_TESTS)
         target_link_libraries(musetone_sync_test PRIVATE
             sdk sdk_hosting sdk_common pluginterfaces base
             mfplat mfreadwrite mfuuid dbghelp ole32 oleaut32 uuid
-            user32 gdi32 comctl32 comdlg32 shell32 xmllite shlwapi winhttp bcrypt)
+            user32 gdi32 comctl32 comdlg32 shell32 xmllite shlwapi winhttp bcrypt crypt32)
         if(WEBVIEW2_SDK_DIR AND EXISTS "${_WEBVIEW2_INCLUDE}/WebView2.h" AND EXISTS "${_WEBVIEW2_LIB}")
             target_include_directories(musetone_sync_test PRIVATE "${_WEBVIEW2_INCLUDE}")
             target_compile_definitions(musetone_sync_test PRIVATE MUSESYNC_HAS_WEBVIEW2=1)

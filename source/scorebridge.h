@@ -22,12 +22,15 @@ struct ScoreSyncSnapshot
 
 bool parseScoreSyncSnapshot (const std::string& text, uint64_t nowMs,
                              ScoreSyncSnapshot& snapshot);
+bool parseScoreSelection (const std::string& text, const std::string& session,
+                         uint64_t nowMs, double& seconds);
 
 #if defined(_WIN32)
 uint64_t scoreBridgeNowMs ();
 bool readScoreSyncSnapshot (uint64_t nowMs, ScoreSyncSnapshot& snapshot,
                             std::string& rawSnapshot);
 bool requestScoreSeek (double scoreSeconds, uint64_t nowMs);
+bool readScoreSelection (const std::string& session, uint64_t nowMs, double& seconds);
 #endif
 
 } // namespace ap

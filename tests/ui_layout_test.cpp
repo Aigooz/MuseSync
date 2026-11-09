@@ -41,7 +41,7 @@ int main ()
                         if (overlaps (guideBoxes[i], guideBoxes[j])) return 1;
                 }
                 const std::vector<ap::ui::Rect> controls {
-                    l.file, l.transport, l.time, l.progress, l.musicalPosition, l.wave, l.open, l.video, l.score, l.theme, l.help, l.collapse, l.followScore,
+                    l.file, l.transport, l.time, l.progress, l.musicalPosition, l.wave, l.detectedTempo, l.tempoMap, l.open, l.video, l.closeMedia, l.score, l.theme, l.help, l.collapse, l.followScore,
                     l.grid, l.numbers, l.zoomOut, l.zoomIn, l.zoomFit, l.follow,
                     l.syncTitle, l.pitchTitle, l.bpmLabel, l.bpmSource, l.timeSigLabel,
                     l.offsetLabel, l.semitoneLabel, l.centsLabel, l.volumeLabel,
@@ -76,7 +76,7 @@ int main ()
                 if (l.progress.w < 170 || l.progress.y != l.grid.y ||
                     l.progress.right () + 8 != l.musicalPosition.x ||
                     l.musicalPosition.right () + 12 != l.grid.x ||
-                    l.wave.h < 200 || l.bpm.h != 32 || l.bpm.y != l.semitone.y ||
+                    l.wave.h < 170 || l.bpm.h != 32 || l.bpm.y != l.semitone.y ||
                     l.bpm.y != l.cents.y || l.bpm.y != l.timeSig.y ||
                     l.semitone.w - 62 < 50 || l.cents.w - 62 < 50 ||
                     l.bpm.w != l.semitone.w || std::abs (l.sync.w - l.pitch.w) > 1 ||
@@ -97,11 +97,34 @@ int main ()
                 ++cases;
             }
     std::printf ("PASS: %d layout / DPI combinations, bounds and overlap checks\n", cases);
+    for (int width : {280, 320, 400, 479, 480, 559, 560, 640, 800, 1280})
+        for (int height : {180, 240, 340, 412, 720})
+        {
+            const auto l = ap::ui::arrangeVideoFloating (width, height);
+            const ap::ui::Rect panel {0, 0, width, height};
+            const std::vector<ap::ui::Rect> controls {
+                l.position, l.progress, l.opacityIcon, l.opacity, l.opacityValue, l.expand, l.video, l.time,
+                l.volumeIcon, l.volume, l.volumeValue, l.offsetLabel, l.offset, l.offsetUnit};
+            for (size_t i = 0; i < controls.size (); ++i)
+            {
+                if (!inside (controls[i], panel)) return 1;
+                for (size_t j = i + 1; j < controls.size (); ++j)
+                    if (overlaps (controls[i], controls[j])) return 1;
+            }
+            if (l.progress.w < 124 || l.video.y != (width < 560 ? 104 : 88) ||
+                l.video.x != 6 || l.video.right () != width - 6 || l.video.bottom () != height - 6 ||
+                (width >= 560 && (l.progress.w > 360 || l.progress.x != l.time.x ||
+                                 l.progress.w != l.time.w)) ||
+                (width < 560 && l.progress.y != l.time.y) ||
+                l.opacity.right () >= l.opacityValue.x || l.opacityValue.right () >= l.expand.x)
+                return 1;
+        }
     double value = 0;
     if (!ap::ui::parseNumericInput (L"-1250", -3600000, 3600000, value) || value != -1250 ||
         !ap::ui::parseNumericInput (L"+12.5", -3600000, 3600000, value) || value != 12.5)
         return 1;
-    for (const auto* text : {L"", L"-", L"nan", L"inf", L"12ms", L"3600001", L"1e999"})
+    for (const auto* text : {L"", L"-", L"nan", L"inf", L"12ms", L"3600001", L"1e999",
+                            L" ", L" 12", L"12 ", L"1 2", L"12\t", L"\n12", L"1e2", L"0x10"})
         if (ap::ui::parseNumericInput (text, -3600000, 3600000, value)) return 1;
     if (ap::ui::parseNumericInput (L"101", 0, 100, value)) return 1;
     return 0;

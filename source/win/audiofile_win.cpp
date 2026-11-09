@@ -63,13 +63,7 @@ std::wstring utf8ToWide (const std::string& s)
 //------------------------------------------------------------------------------
 bool ensureMfStarted ()
 {
-    static bool started = false;
-    static bool ok = false;
-    if (!started)
-    {
-        started = true;
-        ok = SUCCEEDED (::MFStartup (MF_VERSION, MFSTARTUP_NOSOCKET));
-    }
+    static const bool ok = SUCCEEDED (::MFStartup (MF_VERSION, MFSTARTUP_NOSOCKET));
     return ok;
 }
 
@@ -162,6 +156,12 @@ void appendSamples (const BYTE* data, DWORD bytes, bool isFloat, UINT32 bits,
 
 //------------------------------------------------------------------------------
 bool decodeAudioFile (const std::string& path, AudioData& out, std::string& err)
+{
+    return decodeAudioFileCancellable (path, out, err, [] { return false; });
+}
+
+bool decodeAudioFileCancellable (const std::string& path, AudioData& out, std::string& err,
+                                const std::function<bool ()>& cancelled)
 {
     out.samples.clear ();
 
@@ -272,6 +272,13 @@ bool decodeAudioFile (const std::string& path, AudioData& out, std::string& err)
 
     while (true)
     {
+        if (cancelled ())
+        {
+            reader->Release ();
+            out.samples.clear ();
+            err = "Cancelled";
+            return false;
+        }
         DWORD flags = 0;
         IMFSample* sample = nullptr;
         hr = reader->ReadSample (MF_SOURCE_READER_FIRST_AUDIO_STREAM, 0,

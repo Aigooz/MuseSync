@@ -87,6 +87,36 @@ function readScore(score, division) {
              changes: changes.join(";"), measures: measures.join(";"), tempos: tempos.join(";") };
 }
 
+function selectionSeconds(score, division, metadata) {
+    if (!score || !score.selection || !metadata || !(division > 0)) return null;
+    var selection = score.selection, tick = null;
+    if (selection.isRange && selection.startSegment) tick = Number(selection.startSegment.tick);
+    else {
+        var elements = selection.elements || [];
+        for (var i = 0; i < elements.length; ++i) {
+            var element = elements[i];
+            for (var depth = 0; element && depth < 8; ++depth, element = element.parent) {
+                if (typeof element.tick === "number" && isFinite(element.tick) && element.tick >= 0) {
+                    tick = tick === null ? element.tick : Math.min(tick, element.tick);
+                    break;
+                }
+            }
+        }
+    }
+    if (tick === null || !isFinite(tick) || tick < 0) return null;
+    var quarter = tick / division, previous = 0, seconds = 0, bpm = metadata.bpm;
+    var tempos = metadata.tempos ? metadata.tempos.split(";") : [];
+    for (i = 0; i < tempos.length; ++i) {
+        var fields = tempos[i].split(","), at = Number(fields[0]);
+        if (at > quarter) break;
+        seconds += (at - previous) * 60 / bpm;
+        previous = at;
+        bpm = Number(fields[1]);
+    }
+    seconds += (quarter - previous) * 60 / bpm;
+    return isFinite(seconds) && seconds >= 0 && seconds <= 86400 ? seconds : null;
+}
+
 function encodeSnapshot(metadata, now, session) {
     if (!metadata) return "";
     var text = "MT3|" + Math.floor(now) + "|" + metadata.bpm.toFixed(6) + "|" +

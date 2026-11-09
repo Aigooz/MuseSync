@@ -154,6 +154,23 @@ bool parseScoreSyncSnapshot (const std::string& text, uint64_t nowMs,
     return true;
 }
 
+bool parseScoreSelection (const std::string& text, const std::string& session,
+                         uint64_t nowMs, double& seconds)
+{
+    std::istringstream input (text);
+    std::string version, stamp, identity, position;
+    uint64_t timestamp = 0;
+    double parsed = 0;
+    if (text.size () > 256 || !validSession (session) ||
+        !std::getline (input, version, '|') || version != "MP1" ||
+        !std::getline (input, stamp, '|') || !std::getline (input, identity, '|') ||
+        !std::getline (input, position) || identity != session ||
+        !parseUnsigned (stamp, timestamp) || timestamp > nowMs || nowMs - timestamp > 15000 ||
+        !parseDecimal (position, parsed) || parsed > 86400) return false;
+    seconds = parsed;
+    return true;
+}
+
 #if defined(_WIN32)
 namespace {
 std::wstring bridgePath (const wchar_t* name)
@@ -212,6 +229,18 @@ bool readScoreSyncSnapshot (uint64_t nowMs, ScoreSyncSnapshot& snapshot,
     if (!parseScoreSyncSnapshot (decoded, nowMs, snapshot)) return false;
     rawSnapshot = std::move (decoded);
     return true;
+}
+
+bool readScoreSelection (const std::string& session, uint64_t nowMs, double& seconds)
+{
+    if (session.empty ()) return false;
+    const auto path = bridgePath (L"MuseToneSync.ini");
+    if (path.empty ()) return false;
+    wchar_t text[257] {};
+    const DWORD count = GetPrivateProfileStringW (L"Position", L"value", L"", text, 257, path.c_str ());
+    if (!count || count >= 256) return false;
+    const std::wstring wide (text, count);
+    return parseScoreSelection (std::string (wide.begin (), wide.end ()), session, nowMs, seconds);
 }
 
 bool requestScoreSeek (double scoreSeconds, uint64_t nowMs)

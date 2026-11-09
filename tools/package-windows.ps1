@@ -38,6 +38,7 @@ foreach ($file in @('Uninstall-MuseSync.vbs', 'Uninstall-MuseSync.ps1')) {
 $notices = Join-Path $build 'release-notices'
 New-Item -ItemType Directory -Path $notices -Force | Out-Null
 $licenses = @{
+    'minibpm-COPYING.txt' = 'source/third_party/minibpm/COPYING'
     'stb_vorbis.c' = 'source/third_party/stb_vorbis.c'
     'miniz.c' = 'vst3sdk/vstgui4/vstgui/thirdparty/miniz/miniz.c'
     'signalsmith-stretch.txt' = 'source/third_party/signalsmith-stretch/LICENSE.txt'

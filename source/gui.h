@@ -23,10 +23,14 @@
 #include <atomic>
 #include <cstdint>
 #include <cmath>
+#include <memory>
 #include <string>
 #include <vector>
+#include "tempo.h"
 
 namespace ap {
+
+class VideoAudioStream;
 
 //------------------------------------------------------------------------------
 // IPlugView 实现
@@ -257,6 +261,8 @@ public:
         virtual double durationSec () const = 0;
         virtual std::string currentPath () const = 0;
         virtual std::string lastError () const = 0;
+        virtual void setVideoAudio (std::shared_ptr<VideoAudioStream>) {}
+        virtual std::shared_ptr<TempoAnalyzer> tempoAnalyzer () const { return {}; }
 
         // 波形数据（峰值包络），供 GUI 绘制。
         // fromSec / toSec 限定取样区间 —— 放大后必须按可见范围重新取样，
@@ -305,7 +311,7 @@ public:
                                            const std::vector<TempoChange>& = {}) {}
         virtual void clearLiveScoreMetadata () {}
         virtual void setTheme (int) {}
-        virtual int theme () const { return 0; }
+        virtual int theme () const { return 1; }
 
         //---- 宿主时间轴 ----
         // 宿主（MuseScore）会在 ProcessContext 里附带速度、拍号和谱面位置。

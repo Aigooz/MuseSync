@@ -15,6 +15,7 @@ MuseScore {
     property string lastCommand: ""
     property var bridge: null
     property var commands: null
+    property var metadata: null
 
     function openSettings(path) {
         var settings;
@@ -51,7 +52,8 @@ MuseScore {
         var hex = "";
         try {
             // Read curScore on every pass: a cached binding misses tab switches.
-            hex = Snapshot.encodeSnapshot(Snapshot.readScore(updateIdentity(), division), Date.now(), scoreSession);
+            metadata = Snapshot.readScore(updateIdentity(), division);
+            hex = Snapshot.encodeSnapshot(metadata, Date.now(), scoreSession);
         } catch (error) {
             console.log("MuseSync Bridge:", String(error));
         }
@@ -111,6 +113,28 @@ MuseScore {
         }
     }
 
+    function publishSelection() {
+        if (!bridge) return;
+        try {
+            var score = curScore;
+            var sameScore = score && lastScore && score.is(lastScore);
+            var seconds = sameScore ? Snapshot.selectionSeconds(score, division, metadata) : null;
+            bridge.setValue("Position/value", seconds === null ? "" :
+                "MP1|" + Date.now() + "|" + scoreSession + "|" + seconds.toFixed(9));
+            bridge.sync();
+        } catch (error) {
+            bridge.setValue("Position/value", "");
+            bridge.sync();
+        }
+    }
+
+    Timer {
+        id: selectionPoll
+        interval: 150
+        repeat: true
+        onTriggered: root.publishSelection()
+    }
+
     Timer {
         id: commandPoll
         interval: 80
@@ -142,6 +166,7 @@ MuseScore {
         var connected = publish();
         heartbeat.start();
         commandPoll.start();
+        selectionPoll.start();
         started.status = connected ? "已连接当前谱面，速度与拍号将自动同步。" :
                 curScore ? "同步服务已启动，但未能读取当前谱面，请检查谱面后重试。" :
                 "同步服务已启动，打开谱面后将自动连接。";
@@ -153,6 +178,7 @@ MuseScore {
     Component.onDestruction: {
         if (bridge) {
             bridge.setValue("Snapshot/hex", "");
+            bridge.setValue("Position/value", "");
             bridge.sync();
         }
     }

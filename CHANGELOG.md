@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.5.1 - 2026-11-10
+
+- Reduce floating video drag overhead and coalesce pending position updates.
+- Avoid audio-thread allocations for double precision output and reduce video audio buffer lock contention.
+- Skip waveform refresh requests while the waveform is hidden by video or the collapsed view.
+
+## 2.5.0 - 2026-11-10
+
+- Reuse the browser synchronization script and media element; coalesce outstanding script requests and compensate for dispatch latency.
+- Smooth playback-rate estimates and correct small drift with bounded speed changes. Allow buffering and seeks to finish before retrying large drift correction.
+- Add shared volume and delay controls to the video floating toolbar, with responsive layouts down to 280 x 180.
+- Consume translated Enter/Space characters in numeric edits, reject whitespace and malformed numeric pastes, and retain the last valid value on invalid input.
+- Delay wheel steps: 10 ms normally, 100 ms with Ctrl, and 1 ms with Shift.
+- Default new instances and legacy states without a theme to dark; preserve explicitly saved themes.
+
 ## 2.4.2 - 2026-11-08
 
 - 恢复原有控件编号，修正进度条回归测试失败。

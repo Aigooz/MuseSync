@@ -1,4 +1,7 @@
 #include "video_view.h"
+#include "../video_audio.h"
+#include "../tempo.h"
+#include "video_script.h"
 
 #include <windows.h>
 
@@ -9,6 +12,7 @@
 #include <cmath>
 #include <cwchar>
 #include <cwctype>
+#include <cstring>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -16,6 +20,8 @@
 #ifdef MUSESYNC_HAS_WEBVIEW2
 #include <wrl.h>
 #include <WebView2.h>
+#include <WebView2EnvironmentOptions.h>
+#include <wincrypt.h>
 #include <shlobj.h>
 #include <shlwapi.h>
 #endif
@@ -42,6 +48,10 @@ VideoView::~VideoView () = default;
 bool VideoView::openLocal (const std::wstring&) { return false; }
 bool VideoView::openUrl (const std::wstring&) { return false; }
 void VideoView::sync (double, bool, bool) {}
+double VideoView::durationSec () const { return 0.0; }
+std::shared_ptr<VideoAudioStream> VideoView::audioStream () const { return {}; }
+void VideoView::setTempoAnalyzer (std::shared_ptr<TempoAnalyzer>) {}
+void VideoView::present (void*, int, int, int, int, bool, bool, int) {}
 void VideoView::close () {}
 
 #else
@@ -55,8 +65,9 @@ constexpr UINT kOpenTarget = WM_APP + 0x361;
 constexpr UINT kCloseView = WM_APP + 0x362;
 constexpr UINT kSyncPlayback = WM_APP + 0x363;
 constexpr UINT kRescanPlayer = WM_APP + 0x364;
+constexpr UINT kPresentView = WM_APP + 0x365;
 constexpr UINT_PTR kRescanTimerId = 1;
-constexpr int kToolbarHeight = 38;
+constexpr int kToolbarHeight = 0;
 
 std::wstring lowerExtension (const std::wstring& path)
 {
@@ -110,6 +121,10 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
     bool navigationStartingRegistered = false;
     bool navigationCompletedRegistered = false;
     bool frameCreatedRegistered = false;
+    EventRegistrationToken audioMessageToken {};
+    bool audioMessageRegistered = false;
+    std::shared_ptr<VideoAudioStream> audio = std::make_shared<VideoAudioStream> ();
+    std::shared_ptr<TempoAnalyzer> tempo;
     HWND statusLabel = nullptr;
     std::wstring target;
     bool localVideo = false;
@@ -124,6 +139,7 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
     // still handling the previous script. Keep one pending state only.
     std::mutex syncMutex;
     double queuedSeconds = 0.0;
+    std::chrono::steady_clock::time_point queuedAt {}, pendingAt {};
     bool queuedPlaying = false;
     double queuedPlaybackRate = 1.0;
     bool queuedDiscontinuity = false;
@@ -133,13 +149,27 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
     bool runExited = false;
     DWORD threadId = 0;
     double pendingSeconds = 0.0;
+    std::atomic<double> duration {0.0};
+    HWND presentationParent = nullptr;
+    RECT presentationBounds {};
+    bool presentationVisible = false;
+    bool presentationMouseThrough = false;
+    int presentationOpacity = 100;
+    bool presentationQueued = false;
+    bool appliedPresentation = false;
+    bool appliedVisible = false;
+    bool appliedMouseThrough = false;
+    int appliedOpacity = 100;
     bool pendingPlaying = false;
     double pendingPlaybackRate = 1.0;
     bool pendingDiscontinuity = false;
     bool hasPendingPlayback = false;
+    unsigned scriptsInFlight = 0;
+    bool playbackDirty = false;
     bool hasRateSample = false;
     bool lastSyncPlaying = false;
     double lastSyncSeconds = 0.0;
+    double estimatedRate = 1.0;
     std::chrono::steady_clock::time_point lastSyncAt {};
     int rescanPasses = 0;
 
@@ -149,6 +179,7 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
         hasRateSample = false;
         lastSyncPlaying = false;
         lastSyncAt = {};
+        estimatedRate = 1.0;
     }
 
     void schedulePlayerRescan ()
@@ -182,74 +213,97 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
 
     std::wstring makeSyncScript () const
     {
-        wchar_t script[5200] {};
+        wchar_t script[512] {};
         std::swprintf (script, sizeof script / sizeof script[0],
-            L"(()=>{window.__museSyncPlayback={t:%.6f,at:performance.now(),playing:%s,rate:%.4f,local:%s,seek:%s};"
-            L"const findVideo=()=>{const vs=Array.from(document.querySelectorAll('video'));if(!vs.length)return null;"
-            L"const visible=vs.map(e=>({e,r:e.getBoundingClientRect(),s:getComputedStyle(e)})).filter(x=>"
-            L"x.s.visibility!=='hidden'&&x.s.display!=='none'&&(x.r.width>80&&x.r.height>45||x.e.videoWidth>0&&x.e.videoHeight>0));"
-            L"return (visible.length?visible:vs.map(e=>({e,r:e.getBoundingClientRect()})))"
-            L".sort((a,b)=>b.r.width*b.r.height-a.r.width*a.r.height)[0]?.e||null};"
-            L"const frame=()=>{const fs=Array.from(document.querySelectorAll('iframe')).map(e=>({e,r:e.getBoundingClientRect(),s:getComputedStyle(e)}))"
-            L".filter(x=>x.s.visibility!=='hidden'&&x.s.display!=='none'&&x.r.width>160&&x.r.height>90)"
-            L".sort((a,b)=>b.r.width*b.r.height-a.r.width*a.r.height);return fs[0]?.e||null};"
-            L"const applyLayout=(v)=>{if(!v)return;const state=window.__museSyncPlayback||{};"
-            L"if(state.local){document.documentElement.style.height='100%%';document.documentElement.style.background='#111';"
-            L"document.body.style.height='100%%';document.body.style.margin='0';document.body.style.background='#111';"
-            L"document.body.style.display='flex';document.body.style.alignItems='center';document.body.style.justifyContent='center';"
-            L"v.style.display='block';v.style.maxWidth='100%%';v.style.maxHeight='100%%';v.style.width='100%%';v.style.height='100%%';v.style.objectFit='contain';v.style.background='#111';}"
-            L"};"
-            L"const apply=()=>{const state=window.__museSyncPlayback||{};const v=findVideo();"
-            L"if(!v){frame();return false}applyLayout(v);"
-            L"if(Number.isFinite(state.rate)&&state.rate>0.05&&state.rate<8&&Math.abs(v.playbackRate-state.rate)>0.01){try{v.playbackRate=state.rate}catch(e){}}"
-            L"const target=state.t+(state.playing?Math.max(0,performance.now()-state.at)/1000*state.rate:0);"
-            L"const tolerance=state.local?0.16:0.32;"
-            L"if(Number.isFinite(target)&&(state.seek||!Number.isFinite(v.currentTime)||Math.abs(v.currentTime-target)>tolerance)){try{v.currentTime=target}catch(e){}}"
-            L"if(state.playing){if(v.paused){const p=v.play();if(p&&p.catch)p.catch(()=>{})}}else if(!v.paused)v.pause();return true};"
-            L"return !!apply()})()",
-            std::max (0.0, pendingSeconds), pendingPlaying ? L"true" : L"false",
+            L"window.__museSyncPlayback={t:%.6f,at:performance.now(),playing:%s,rate:%.4f,local:%s,seek:%s,generation:%u};",
+            std::max (0.0, pendingSeconds + (pendingPlaying ? pendingPlaybackRate *
+                std::chrono::duration<double> (std::chrono::steady_clock::now () - pendingAt).count () : 0.0)),
+            pendingPlaying ? L"true" : L"false",
             pendingPlaybackRate, localVideo ? L"true" : L"false",
-            pendingDiscontinuity ? L"true" : L"false");
-        return script;
+            pendingDiscontinuity ? L"true" : L"false", audio->generation ());
+        return std::wstring (script) + L"window.__museSyncUpdate ? window.__museSyncUpdate() : -1";
+    }
+
+    void receiveAudio (ICoreWebView2WebMessageReceivedEventArgs* args)
+    {
+        LPWSTR text = nullptr;
+        if (!args || FAILED (args->TryGetWebMessageAsString (&text))) return;
+        constexpr wchar_t prefix[] = L"MuseSyncPCM:";
+        constexpr size_t prefixLength = sizeof prefix / sizeof prefix[0] - 1;
+        const size_t length = std::wcslen (text);
+        if (length > prefixLength && length <= 50000 && std::wcsncmp (text, prefix, prefixLength) == 0)
+        {
+            DWORD size = 0;
+            if (::CryptStringToBinaryW (text + prefixLength, static_cast<DWORD> (length - prefixLength),
+                                        CRYPT_STRING_BASE64, nullptr, &size, nullptr, nullptr) &&
+                size >= 32 && size <= 32792 && (size - 24) % 8 == 0)
+            {
+                std::vector<float> samples ((size - 24) / 4);
+                std::vector<BYTE> decoded (size);
+                if (::CryptStringToBinaryW (text + prefixLength, static_cast<DWORD> (length - prefixLength),
+                                           CRYPT_STRING_BASE64, decoded.data (), &size, nullptr, nullptr))
+                {
+                    uint32_t generation = 0, rate = 0;
+                    std::memcpy (&generation, decoded.data (), 4);
+                    std::memcpy (&rate, decoded.data () + 4, 4);
+                    double endSeconds = 0, speed = 1;
+                    std::memcpy (&endSeconds, decoded.data () + 8, 8);
+                    std::memcpy (&speed, decoded.data () + 16, 8);
+                    std::memcpy (samples.data (), decoded.data () + 24, size - 24);
+                    if (generation != audio->generation ()) { ::CoTaskMemFree (text); return; }
+                    audio->push (samples.data (), samples.size () / 2, rate, generation);
+                    if (auto analyzer = std::atomic_load (&tempo))
+                        analyzer->push (samples.data (), samples.size () / 2, rate,
+                                        generation, endSeconds, speed);
+                }
+            }
+        }
+        ::CoTaskMemFree (text);
     }
 
     void applyPlaybackState ()
     {
         if (!webview || !hasPendingPlayback) return;
+        if (scriptsInFlight) { playbackDirty = true; return; }
+        playbackDirty = false;
         if (localVideo) updateStatus (true);
         const auto script = makeSyncScript ();
+        pendingDiscontinuity = false;
         auto self = std::enable_shared_from_this<Impl>::shared_from_this ();
         const auto generation = navigationGeneration;
-        webview->ExecuteScript (script.c_str (), Callback<ICoreWebView2ExecuteScriptCompletedHandler> (
+        auto completed = Callback<ICoreWebView2ExecuteScriptCompletedHandler> (
             [self, generation] (HRESULT error, LPCWSTR result) -> HRESULT {
-                if (generation != self->navigationGeneration || self->localVideo) return S_OK;
-                if (SUCCEEDED (error) && result && std::wcscmp (result, L"true") == 0)
+                if (generation != self->navigationGeneration) return S_OK;
+                if (SUCCEEDED (error) && result)
                 {
-                    self->foundRemoteVideo = true;
-                    self->updateStatus (true);
+                    wchar_t* end = nullptr;
+                    const double duration = std::wcstod (result, &end);
+                    if (end != result && !*end && std::isfinite (duration) && duration >= 0)
+                    {
+                        self->duration.store (duration);
+                        self->foundRemoteVideo = true;
+                    }
                 }
+                if (self->scriptsInFlight && --self->scriptsInFlight == 0 && self->playbackDirty)
+                    self->applyPlaybackState ();
                 return S_OK;
-            }).Get ());
+            });
+        // Account for the whole batch before issuing asynchronous work.
+        scriptsInFlight = 1 + static_cast<unsigned> (frames.size ());
+        if (FAILED (webview->ExecuteScript (script.c_str (), completed.Get ())))
+            completed->Invoke (E_FAIL, nullptr);
         for (auto it = frames.begin (); it != frames.end ();)
         {
             BOOL destroyed = FALSE;
             if (FAILED ((*it)->IsDestroyed (&destroyed)) || destroyed)
             {
                 it = frames.erase (it);
+                completed->Invoke (E_FAIL, nullptr);
                 continue;
             }
             auto frame = *it;
-            frame->ExecuteScript (script.c_str (),
-                Callback<ICoreWebView2ExecuteScriptCompletedHandler> (
-                    [self, generation] (HRESULT error, LPCWSTR result) -> HRESULT {
-                        if (generation != self->navigationGeneration || self->localVideo) return S_OK;
-                        if (SUCCEEDED (error) && result && std::wcscmp (result, L"true") == 0)
-                        {
-                            self->foundRemoteVideo = true;
-                            self->updateStatus (true);
-                        }
-                        return S_OK;
-                    }).Get ());
+            if (FAILED (frame->ExecuteScript (script.c_str (), completed.Get ())))
+                completed->Invoke (E_FAIL, nullptr);
             ++it;
         }
     }
@@ -299,12 +353,13 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                     self->resetRateEstimate ();
                     self->stopPlayerRescan ();
                     self->foundRemoteVideo = false;
+                    self->duration.store (0.0);
                     ++self->navigationGeneration;
+                    self->scriptsInFlight = 0;
+                    self->playbackDirty = false;
                     if (self->webview) self->navigate ();
                     else self->initialize ();
                 }
-                ::ShowWindow (hwnd, SW_RESTORE);
-                ::SetForegroundWindow (hwnd);
                 return 0;
             }
             case kSyncPlayback:
@@ -312,14 +367,79 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                 {
                     std::lock_guard<std::mutex> lock (self->syncMutex);
                     self->pendingSeconds = self->queuedSeconds;
+                    self->pendingAt = self->queuedAt;
                     self->pendingPlaying = self->queuedPlaying;
                     self->pendingPlaybackRate = self->queuedPlaybackRate;
-                    self->pendingDiscontinuity = self->queuedDiscontinuity;
+                    self->pendingDiscontinuity = self->pendingDiscontinuity || self->queuedDiscontinuity;
                     self->queuedDiscontinuity = false;
                     self->hasPendingPlayback = true;
                     self->syncQueued = false;
                 }
                 self->applyPlaybackState ();
+                return 0;
+            }
+            case kPresentView:
+            {
+                HWND parent;
+                RECT bounds;
+                bool visible, mouseThrough;
+                int opacity;
+                {
+                    std::lock_guard<std::mutex> lock (self->stateMutex);
+                    parent = self->presentationParent;
+                    bounds = self->presentationBounds;
+                    visible = self->presentationVisible;
+                    mouseThrough = self->presentationMouseThrough;
+                    opacity = self->presentationOpacity;
+                    self->presentationQueued = false;
+                }
+                if (parent && ::IsWindow (parent))
+                {
+                    const bool wasPopup = (::GetWindowLongPtrW (hwnd, GWL_STYLE) & WS_POPUP) != 0;
+                    const bool changedParent = ::GetParent (hwnd) != parent || wasPopup != mouseThrough;
+                    const bool changedMode = !self->appliedPresentation ||
+                        self->appliedMouseThrough != mouseThrough || changedParent;
+                    if (changedParent)
+                    {
+                        ::ShowWindow (hwnd, SW_HIDE);
+                        ::SetParent (hwnd, nullptr);
+                        ::SetWindowLongPtrW (hwnd, GWL_STYLE,
+                            (mouseThrough ? WS_POPUP : WS_CHILD) | WS_CLIPCHILDREN);
+                        if (mouseThrough)
+                            ::SetWindowLongPtrW (hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR> (parent));
+                        else ::SetParent (hwnd, parent);
+                    }
+                    // Layered transparent top-level windows pass input through even
+                    // to other processes; HTTRANSPARENT alone only covers one thread.
+                    if (changedMode)
+                        ::SetWindowLongPtrW (hwnd, GWL_EXSTYLE, WS_EX_TOOLWINDOW |
+                            (mouseThrough ? WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE : 0));
+                    // WebView2 owns native child windows in its browser process.
+                    // Disable the input subtree as well as the popup hit surface.
+                    if (changedMode) ::EnableWindow (hwnd, mouseThrough ? FALSE : TRUE);
+                    if (mouseThrough)
+                    {
+                        if (changedMode || self->appliedOpacity != opacity)
+                            ::SetLayeredWindowAttributes (hwnd, 0,
+                                static_cast<BYTE> (std::clamp (opacity, 20, 100) * 255 / 100), LWA_ALPHA);
+                        ::MapWindowPoints (parent, nullptr, reinterpret_cast<POINT*> (&bounds), 2);
+                    }
+                    ::SetWindowPos (hwnd, mouseThrough ? HWND_TOPMOST : HWND_TOP, bounds.left, bounds.top,
+                        bounds.right - bounds.left, bounds.bottom - bounds.top,
+                        SWP_NOACTIVATE | (changedMode ? SWP_FRAMECHANGED : SWP_NOZORDER) |
+                        ((!self->appliedPresentation || self->appliedVisible != visible || changedParent) ?
+                            (visible ? SWP_SHOWWINDOW : SWP_HIDEWINDOW) : 0));
+                    if (self->controller)
+                    {
+                        if (!self->appliedPresentation || self->appliedVisible != visible || changedParent)
+                            self->controller->put_IsVisible (visible ? TRUE : FALSE);
+                        self->controller->NotifyParentWindowPositionChanged ();
+                    }
+                    self->appliedPresentation = true;
+                    self->appliedVisible = visible;
+                    self->appliedMouseThrough = mouseThrough;
+                    self->appliedOpacity = opacity;
+                }
                 return 0;
             }
             case kRescanPlayer:
@@ -381,6 +501,8 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                     self->frameCreatedRegistered = false;
                 }
                 self->frames.clear ();
+                if (self->webview && self->audioMessageRegistered)
+                    self->webview->remove_WebMessageReceived (self->audioMessageToken);
                 self->statusLabel = nullptr;
                 if (self->controller) self->controller->Close ();
                 self->webview4.Reset ();
@@ -409,7 +531,9 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
         }
 
         auto self = std::enable_shared_from_this<Impl>::shared_from_this ();
-        const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions (nullptr, data.c_str (), nullptr,
+        auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions> ();
+        options->put_AdditionalBrowserArguments (L"--autoplay-policy=no-user-gesture-required");
+        const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions (nullptr, data.c_str (), options.Get (),
             Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> (
                 [self] (HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                     if (self->stopping || !self->currentWindow ()) return S_OK;
@@ -430,6 +554,19 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                                 }
                                 self->controller = value;
                                 if (FAILED (self->controller->get_CoreWebView2 (&self->webview)))
+                                {
+                                    self->fail ();
+                                    return S_OK;
+                                }
+                                self->audioMessageRegistered = SUCCEEDED (self->webview->add_WebMessageReceived (
+                                    Callback<ICoreWebView2WebMessageReceivedEventHandler> (
+                                        [self] (ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                            self->receiveAudio (args);
+                                            return S_OK;
+                                        }).Get (), &self->audioMessageToken));
+                                ComPtr<ICoreWebView2_8> audioControl;
+                                if (FAILED (self->webview.As (&audioControl)) ||
+                                    FAILED (audioControl->put_IsMuted (TRUE)) || !self->audioMessageRegistered)
                                 {
                                     self->fail ();
                                     return S_OK;
@@ -462,6 +599,14 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                                                     if (SUCCEEDED (frame.As (&frame2)))
                                                     {
                                                         self->frames.push_back (frame2);
+                                                        EventRegistrationToken token {};
+                                                        std::weak_ptr<Impl> weak = self;
+                                                        frame2->add_WebMessageReceived (
+                                                            Callback<ICoreWebView2FrameWebMessageReceivedEventHandler> (
+                                                                [weak] (ICoreWebView2Frame*, ICoreWebView2WebMessageReceivedEventArgs* args) -> HRESULT {
+                                                                    if (auto impl = weak.lock ()) impl->receiveAudio (args);
+                                                                    return S_OK;
+                                                                }).Get (), &token);
                                                         // Web players often create their video element after the frame.
                                                         // Rescan on this window's STA thread until it appears.
                                                         if (const HWND hwnd = self->currentWindow ())
@@ -479,6 +624,8 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                                             self->frames.clear ();
                                             self->foundRemoteVideo = false;
                                             ++self->navigationGeneration;
+                                            self->scriptsInFlight = 0;
+                                            self->playbackDirty = false;
                                             return S_OK;
                                         }).Get (), &self->navigationStartingToken);
                                 self->navigationStartingRegistered = SUCCEEDED (navigationStartingResult);
@@ -492,9 +639,17 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                                             return S_OK;
                                         }).Get (), &self->navigationCompletedToken);
                                 self->navigationCompletedRegistered = SUCCEEDED (navigationCompletedResult);
-                                self->initializing = false;
-                                self->setStartup (true);
-                                self->navigate ();
+                                const HRESULT injected = self->webview->AddScriptToExecuteOnDocumentCreated (
+                                    kVideoPlayerScript, Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler> (
+                                        [self] (HRESULT error, LPCWSTR) -> HRESULT {
+                                            if (self->stopping) return S_OK;
+                                            if (FAILED (error)) return self->fail ();
+                                            self->initializing = false;
+                                            self->setStartup (true);
+                                            self->navigate ();
+                                            return S_OK;
+                                        }).Get ());
+                                if (FAILED (injected)) return self->fail ();
                                 return S_OK;
                             }).Get ());
                 }).Get ());
@@ -513,7 +668,23 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
     void navigate ()
     {
         if (!webview || target.empty ()) return;
-        if (FAILED (webview->Navigate (target.c_str ()))) fail ();
+        std::wstring destination = target;
+        if (localVideo)
+        {
+            // file: media has an opaque origin and Web Audio returns silence.
+            // A private HTTPS folder mapping gives local media a same-origin URL.
+            std::vector<wchar_t> path (32768);
+            DWORD length = static_cast<DWORD> (path.size ());
+            ComPtr<ICoreWebView2_3> mapped;
+            if (FAILED (::PathCreateFromUrlW (target.c_str (), path.data (), &length, 0)) ||
+                FAILED (webview.As (&mapped))) { fail (); return; }
+            std::wstring folder (path.data ());
+            folder.resize (folder.find_last_of (L"/\\"));
+            if (FAILED (mapped->SetVirtualHostNameToFolderMapping (L"musesync-video.invalid",
+                folder.c_str (), COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS))) { fail (); return; }
+            destination = L"https://musesync-video.invalid/" + target.substr (target.find_last_of (L'/') + 1);
+        }
+        if (FAILED (webview->Navigate (destination.c_str ()))) fail ();
     }
 
     void run (const std::wstring& firstTarget)
@@ -564,8 +735,9 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
         const int windowHeight = (std::min) ((std::max) (460, workHeight / 2), 560);
         const int x = (std::max) (static_cast<int> (workArea.left), static_cast<int> (workArea.right) - windowWidth - 24);
         const int y = (std::max) (static_cast<int> (workArea.top), static_cast<int> (workArea.top) + 48);
-        const HWND created = ::CreateWindowExW (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, kWindowClass,
-            L"MuseSync 视频播放器", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+        // Start hidden and unattached so startup never waits on the host UI thread.
+        const HWND created = ::CreateWindowExW (WS_EX_TOOLWINDOW, kWindowClass,
+            L"MuseSync 视频播放器", WS_POPUP | WS_CLIPCHILDREN,
             x, y, windowWidth, windowHeight, nullptr, nullptr, wc.hInstance, this);
         if (!created)
         {
@@ -576,7 +748,6 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
             stateChanged.notify_all ();
             return;
         }
-        ::ShowWindow (created, SW_SHOW);
         if (stopping)
         {
             ::DestroyWindow (created);
@@ -677,27 +848,41 @@ void VideoView::sync (double seconds, bool playing, bool discontinuity)
     if (!m_impl || m_impl->stopping || !std::isfinite (seconds)) return;
     const HWND window = m_impl->currentWindow ();
     if (!window) return;
+    m_impl->audio->synchronize (playing, discontinuity);
 
     const auto now = std::chrono::steady_clock::now ();
     bool post = false;
     {
         std::lock_guard<std::mutex> lock (m_impl->syncMutex);
         const double target = std::max (0.0, seconds);
-        double rate = 1.0;
+        double rate = m_impl->estimatedRate;
         if (!discontinuity && playing && m_impl->hasRateSample && m_impl->lastSyncPlaying)
         {
             const double elapsed = std::chrono::duration<double> (now - m_impl->lastSyncAt).count ();
             const double delta = target - m_impl->lastSyncSeconds;
             // Large deltas are seeks, not a speed change. A bounded rate keeps
             // normal tempo changes smooth without making a seek play too fast.
-            if (elapsed >= 0.08 && elapsed <= 1.5 && delta > 0.0 && delta < 2.5)
-                rate = std::clamp (delta / elapsed, 0.25, 4.0);
+            if (elapsed >= 0.5 && elapsed <= 2.0 && delta > 0.0 && delta < 8.0)
+            {
+                const double measured = std::clamp (delta / elapsed, 0.25, 4.0);
+                rate += (measured - rate) * .35;
+                if (std::abs (rate - 1.0) < .025) rate = 1.0;
+                m_impl->lastSyncSeconds = target;
+                m_impl->lastSyncAt = now;
+            }
         }
-        m_impl->lastSyncSeconds = target;
-        m_impl->lastSyncAt = now;
+        if (discontinuity || !playing || !m_impl->hasRateSample || !m_impl->lastSyncPlaying ||
+            now - m_impl->lastSyncAt > std::chrono::seconds (2))
+        {
+            m_impl->lastSyncSeconds = target;
+            m_impl->lastSyncAt = now;
+            if (!playing) rate = 1.0;
+        }
+        m_impl->estimatedRate = rate;
         m_impl->hasRateSample = !discontinuity;
         m_impl->lastSyncPlaying = playing;
         m_impl->queuedSeconds = target;
+        m_impl->queuedAt = now;
         m_impl->queuedPlaying = playing;
         m_impl->queuedPlaybackRate = rate;
         m_impl->queuedDiscontinuity = m_impl->queuedDiscontinuity || discontinuity;
@@ -715,10 +900,53 @@ void VideoView::sync (double seconds, bool playing, bool discontinuity)
     }
 }
 
+double VideoView::durationSec () const
+{
+    return m_impl ? m_impl->duration.load () : 0.0;
+}
+
+std::shared_ptr<VideoAudioStream> VideoView::audioStream () const
+{
+    return m_impl ? m_impl->audio : nullptr;
+}
+
+void VideoView::setTempoAnalyzer (std::shared_ptr<TempoAnalyzer> analyzer)
+{
+    std::atomic_store (&m_impl->tempo, std::move (analyzer));
+}
+
+void VideoView::present (void* parent, int x, int y, int width, int height, bool visible,
+                         bool mouseThrough, int opacity)
+{
+    if (!m_impl || m_impl->stopping) return;
+    const HWND window = m_impl->currentWindow ();
+    if (!window) return;
+    bool post = false;
+    {
+        std::lock_guard<std::mutex> lock (m_impl->stateMutex);
+        m_impl->presentationParent = static_cast<HWND> (parent);
+        m_impl->presentationBounds = {x, y, x + width, y + height};
+        m_impl->presentationVisible = visible;
+        m_impl->presentationMouseThrough = mouseThrough;
+        m_impl->presentationOpacity = opacity;
+        if (!m_impl->presentationQueued)
+        {
+            m_impl->presentationQueued = true;
+            post = true;
+        }
+    }
+    if (post && !::PostMessageW (window, kPresentView, 0, 0))
+    {
+        std::lock_guard<std::mutex> lock (m_impl->stateMutex);
+        m_impl->presentationQueued = false;
+    }
+}
+
 void VideoView::close ()
 {
     if (!m_impl || !m_impl->thread.joinable ()) return;
     m_impl->stopping = true;
+    m_impl->audio->synchronize (false, true);
     HWND window = nullptr;
     DWORD threadId = 0;
     {
@@ -733,6 +961,24 @@ void VideoView::close ()
     }
     else if (threadId)
         ::PostThreadMessageW (threadId, WM_QUIT, 0, 0);
+    // A child on the video STA can send synchronous messages to its UI parent
+    // while closing. Dispatch those messages until that thread has exited.
+    const HANDLE handle = m_impl->thread.native_handle ();
+    while (::MsgWaitForMultipleObjectsEx (1, &handle, INFINITE, QS_ALLINPUT,
+                                         MWMO_INPUTAVAILABLE) == WAIT_OBJECT_0 + 1)
+    {
+        MSG message {};
+        while (::PeekMessageW (&message, nullptr, 0, 0, PM_REMOVE))
+        {
+            if (message.message == WM_QUIT)
+            {
+                ::PostQuitMessage (static_cast<int> (message.wParam));
+                break;
+            }
+            ::TranslateMessage (&message);
+            ::DispatchMessageW (&message);
+        }
+    }
     m_impl->thread.join ();
 }
 

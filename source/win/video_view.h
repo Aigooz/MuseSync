@@ -5,6 +5,9 @@
 
 namespace ap {
 
+class VideoAudioStream;
+class TempoAnalyzer;
+
 class VideoView
 {
 public:
@@ -16,6 +19,11 @@ public:
     bool openLocal (const std::wstring& path);
     bool openUrl (const std::wstring& url);
     void sync (double seconds, bool playing, bool discontinuity = false);
+    double durationSec () const;
+    std::shared_ptr<VideoAudioStream> audioStream () const;
+    void setTempoAnalyzer (std::shared_ptr<TempoAnalyzer> analyzer);
+    void present (void* parent, int x, int y, int width, int height, bool visible,
+                  bool mouseThrough = false, int opacity = 100);
     void close ();
 
 private:

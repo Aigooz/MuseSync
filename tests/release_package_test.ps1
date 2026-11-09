@@ -20,6 +20,8 @@ if ($exe.VersionInfo.ProductVersion.Trim() -ne $version) { throw 'Installer vers
 if ($exe.VersionInfo.ProductName -notlike 'MuseSync*') { throw 'Installer brand mismatch' }
 $archives = @{
     "MuseSync-$version-Source.zip" = @(
+        'source/tempo.cpp', 'source/tempo.h', 'source/third_party/minibpm/MiniBpm.cpp',
+        'source/third_party/minibpm/COPYING',
         'CMakeLists.txt', 'source/win/gui_win.cpp', 'companion/MuseToneSync/MuseToneSync.qml',
         'installer/windows/release.ini', 'installer/windows/ChineseSimplified.isl',
         'vst3sdk/LICENSE.txt', 'vst3sdk/pluginterfaces/LICENSE.txt',
@@ -27,6 +29,7 @@ $archives = @{
         'vst3sdk/vstgui4/vstgui/thirdparty/miniz/miniz.c', 'vst3sdk/cmake/modules/SMTG_PlatformToolset.cmake'
     )
     "MuseSync-$version-Windows-x64.zip" = @(
+        "MuseSync-$version-Windows-x64/licenses/minibpm-COPYING.txt",
         "MuseSync-$version-Windows-x64/MuseSync.vst3/Contents/x86_64-win/MuseSync.vst3",
         "MuseSync-$version-Windows-x64/MuseToneSync/MuseToneSync.qml",
         "MuseSync-$version-Windows-x64/licenses/signalsmith-stretch.txt",
@@ -69,6 +72,7 @@ foreach ($item in $archives.GetEnumerator()) {
         }
         if ($item.Key.EndsWith('Source.zip')) {
             foreach ($file in @('CMakeLists.txt', 'source/aplaysdk.cpp', 'source/win/gui_win.cpp',
+                    'source/tempo.cpp', 'source/tempo.h', 'source/third_party/minibpm/MiniBpm.cpp',
                     'companion/MuseToneSync/MuseToneSync.qml', '.github/workflows/build-windows.yml',
                     'installer/windows/ChineseSimplified.isl', 'installer/windows/setup-musetone.iss',
                     'installer/windows/INSTALL.txt')) {

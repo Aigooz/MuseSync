@@ -92,7 +92,7 @@ Root: HKLM; Subkey: "Software\MuseTone"; ValueType: string; ValueName: "Vst3Dir"
 #endif
 
 [Run]
-Filename: "{app}\安装说明.txt"; Description: "查看安装与启用说明"; Flags: postinstall shellexec nowait skipifsilent
+Filename: "{app}\安装说明.txt"; Description: "查看安装与启用说明"; Flags: postinstall shellexec nowait skipifsilent unchecked
 
 [Code]
 var
