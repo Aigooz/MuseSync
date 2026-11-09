@@ -1,6 +1,5 @@
 #include "video_view.h"
 #include "../video_audio.h"
-#include "../tempo.h"
 #include "video_script.h"
 
 #include <windows.h>
@@ -50,7 +49,6 @@ bool VideoView::openUrl (const std::wstring&) { return false; }
 void VideoView::sync (double, bool, bool) {}
 double VideoView::durationSec () const { return 0.0; }
 std::shared_ptr<VideoAudioStream> VideoView::audioStream () const { return {}; }
-void VideoView::setTempoAnalyzer (std::shared_ptr<TempoAnalyzer>) {}
 void VideoView::present (void*, int, int, int, int, bool, bool, int) {}
 void VideoView::close () {}
 
@@ -124,7 +122,6 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
     EventRegistrationToken audioMessageToken {};
     bool audioMessageRegistered = false;
     std::shared_ptr<VideoAudioStream> audio = std::make_shared<VideoAudioStream> ();
-    std::shared_ptr<TempoAnalyzer> tempo;
     HWND statusLabel = nullptr;
     std::wstring target;
     bool localVideo = false;
@@ -246,15 +243,9 @@ struct VideoView::Impl : std::enable_shared_from_this<VideoView::Impl>
                     uint32_t generation = 0, rate = 0;
                     std::memcpy (&generation, decoded.data (), 4);
                     std::memcpy (&rate, decoded.data () + 4, 4);
-                    double endSeconds = 0, speed = 1;
-                    std::memcpy (&endSeconds, decoded.data () + 8, 8);
-                    std::memcpy (&speed, decoded.data () + 16, 8);
                     std::memcpy (samples.data (), decoded.data () + 24, size - 24);
                     if (generation != audio->generation ()) { ::CoTaskMemFree (text); return; }
                     audio->push (samples.data (), samples.size () / 2, rate, generation);
-                    if (auto analyzer = std::atomic_load (&tempo))
-                        analyzer->push (samples.data (), samples.size () / 2, rate,
-                                        generation, endSeconds, speed);
                 }
             }
         }
@@ -908,11 +899,6 @@ double VideoView::durationSec () const
 std::shared_ptr<VideoAudioStream> VideoView::audioStream () const
 {
     return m_impl ? m_impl->audio : nullptr;
-}
-
-void VideoView::setTempoAnalyzer (std::shared_ptr<TempoAnalyzer> analyzer)
-{
-    std::atomic_store (&m_impl->tempo, std::move (analyzer));
 }
 
 void VideoView::present (void* parent, int x, int y, int width, int height, bool visible,

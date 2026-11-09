@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.5.2 - 2026-11-10
+
+- Disable BPM analysis for online video; local audio and video analysis remains available.
+
 ## 2.5.1 - 2026-11-10
 
 - Reduce floating video drag overhead and coalesce pending position updates.

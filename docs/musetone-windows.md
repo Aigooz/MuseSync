@@ -1,6 +1,6 @@
 # MuseSync 谱伴同步 for Windows
 
-当前发布版：**2.5.1**，同步组件：**MuseSync Bridge 1.4.0**。
+当前发布版：**2.5.2**，同步组件：**MuseSync Bridge 1.4.0**。
 
 原名 MuseTone。从 2.3.0 起，VST3 文件夹和内部模块已统一为 `MuseSync.vst3`。
 VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保持不变。
@@ -8,7 +8,7 @@ VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保�
 
 ## 下载与启用
 
-普通用户下载 `MuseSync-Setup-2.5.1-Windows-x64.exe`，核对同一发布页的
+普通用户下载 `MuseSync-Setup-2.5.2-Windows-x64.exe`，核对同一发布页的
 `SHA256SUMS.txt` 后安装。此 EXE 是安装器，不是独立播放器。
 需要 Windows 10/11 x64、官方 MuseScore 4 安装版，以及 Microsoft Edge WebView2 Runtime；安装前保存谱面并退出 MuseScore。分发时只需发送 EXE，对方无需源码或 ZIP，但仍需安装宿主并启用插件。Windows 11 通常已预装 WebView2 Runtime；若视频窗口提示缺少运行时，请从微软官方渠道安装 Evergreen WebView2 Runtime。
 
@@ -57,7 +57,7 @@ MuseScore 3 不支持 VST3，因此不支持本插件。4.0–4.5 已增加旧�
 
 分段识别采用 [MiniBPM](https://github.com/breakfastquay/minibpm)，使用 8 秒重叠窗口，每 1 秒计算一段。分析完成后，播放和暂停跳转均会显示对应位置的估计值；分析在后台运行，不占用宿主音频回调。静音、持续单音或不足 4 秒的片段可能显示“未识别”。素材关闭或更换时会取消旧任务并清空旧结果。
 
-在线视频通过播放器输出的音频边播放边分析，需要连续约 6–8 秒音频后才出现估计值，跳转后重新积累音频；未播放区域不会预先分析。在线视频需允许读取 HTML5 播放器的音频，受跨域和网站策略限制的音源可能无法识别。显示的是素材原始速度的估计 BPM，播放倍率会被换算回去。
+在线视频不进行素材 BPM 分析。音频和本地视频显示的是素材原始速度的估计 BPM。
 
 识别范围设置为 45–240 BPM，快速变速会受到窗口平滑影响，复杂节奏仍可能出现半速／倍速判断。该数值用于观察素材速度，不会自动修改谱面速度、手动 BPM 或同步对齐关系；音频节拍到谱面小节的自动匹配仍需另行实现。
 

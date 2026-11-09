@@ -3749,26 +3749,18 @@ void WinView::loadVideo (const std::wstring& target, bool local)
     m_videoTarget = target;
     m_videoView = std::move (candidate);
     m_backend->setVideoAudio (m_videoView->audioStream ());
-    if (auto analyzer = m_backend->tempoAnalyzer ())
+    if (auto analyzer = m_backend->tempoAnalyzer (); local && analyzer)
     {
-        if (local)
-        {
-            const auto path = wideToUtf8 (target);
-            analyzer->decode ([path] (AudioData& audio, std::string& error,
-                                     const std::function<bool ()>& cancelled) {
-                const HRESULT init = ::CoInitializeEx (nullptr, COINIT_MULTITHREADED);
-                struct ComScope {
-                    HRESULT init;
-                    ~ComScope () { if (SUCCEEDED (init)) ::CoUninitialize (); }
-                } scope {init};
-                return decodeAudioFileCancellable (path, audio, error, cancelled);
-            });
-        }
-        else
-        {
-            analyzer->startLive ();
-            m_videoView->setTempoAnalyzer (analyzer);
-        }
+        const auto path = wideToUtf8 (target);
+        analyzer->decode ([path] (AudioData& audio, std::string& error,
+                                 const std::function<bool ()>& cancelled) {
+            const HRESULT init = ::CoInitializeEx (nullptr, COINIT_MULTITHREADED);
+            struct ComScope {
+                HRESULT init;
+                ~ComScope () { if (SUCCEEDED (init)) ::CoUninitialize (); }
+            } scope {init};
+            return decodeAudioFileCancellable (path, audio, error, cancelled);
+        });
     }
     m_videoSyncInitialized = false;
     m_videoTimeline = {};

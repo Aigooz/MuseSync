@@ -28,7 +28,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 # Keep the build target and bundle path stable for existing host references.
-project(MuseTone VERSION 2.5.1 LANGUAGES C CXX)
+project(MuseTone VERSION 2.5.2 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

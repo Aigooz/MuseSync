@@ -1413,6 +1413,22 @@ void videoControlTests (const std::filesystem::path& wave)
     SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1029, BN_CLICKED), 0);
     check (waitUntil ([&] { return GetWindow (video, GW_OWNER) == floating; }),
         "second video collapses");
+    SendMessageW (floating, WM_COMMAND, MAKEWPARAM (1030, BN_CLICKED), 0);
+    check (waitUntil ([&] { return GetParent (video) == panel; }), "expand before opening online video");
+    check (waitUntil ([&] { return backend.tempoAnalyzer ()->snapshot ()->state == ap::TempoResult::State::Ready; }),
+        "local video analysis completes before replacement");
+    const UINT_PTR urlTimer = SetTimer (nullptr, 0, 10, [] (HWND, UINT, UINT_PTR timerId, DWORD) {
+        HWND prompt = FindWindowExW (nullptr, nullptr, L"MuseSyncVideoUrlPrompt", nullptr);
+        if (!prompt) return;
+        KillTimer (nullptr, timerId);
+        SetWindowTextW (GetDlgItem (prompt, 1), L"https://example.com/video");
+        PostMessageW (prompt, WM_COMMAND, 2, 0);
+    });
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1402, BN_CLICKED), 0);
+    KillTimer (nullptr, urlTimer);
+    check (backend.tempoAnalyzer ()->snapshot ()->state == ap::TempoResult::State::Empty,
+        "online video clears previous BPM and does not start analysis");
+    SendMessageW (panel, WM_COMMAND, MAKEWPARAM (1029, BN_CLICKED), 0);
     view->removed ();
     check (!IsWindow (floating), "closing collapsed video destroys floating window");
     view->release ();
