@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.5.3 - 2026-11-10
+
+- 在主界面和悬浮窗的小节拍数旁显示当前谱面 BPM。
+
 ## 2.5.2 - 2026-11-10
 
 - Disable BPM analysis for online video; local audio and video analysis remains available.

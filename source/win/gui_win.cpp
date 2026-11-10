@@ -777,6 +777,7 @@ private:
     HWND m_editorShell = nullptr;
     bool m_collapsed = false, m_shellWasVisible = false;
     std::wstring m_floatingText;
+    std::wstring m_scoreTempoText;
     // ⚠️ 使用指南【不是】独立窗口，而是主窗口自己画的一层（见 setHelp）。
     //    旧版把它做成最后一个创建的子窗口，指望「创建顺序 = z 序最上」；
     //    用户实测在 MuseScore 里没生效：帮助画在了主界面【下面】，
@@ -1565,7 +1566,12 @@ void WinView::paintChrome (HDC dc)
     ::DeleteObject (status);
     text (m_transportText, {l.transport.x + 12, l.transport.y, l.transport.w - 12, l.transport.h}, m_fontSmall, kMuted);
     text (m_timeText, l.time, m_fontMono, kMuted);
-    text (m_musicalText, l.musicalPosition, m_fontPosition, kAccent);
+    auto positionBox = l.musicalPosition;
+    positionBox.h = 14;
+    text (m_musicalText, positionBox, m_fontHeading, kAccent);
+    positionBox.y += 14;
+    positionBox.h = 14;
+    text (m_scoreTempoText, positionBox, m_fontSmall, kMuted);
     text (L"同步对齐", l.syncTitle, m_fontHeading, kInk);
     text (L"整曲移调", l.pitchTitle, m_fontHeading, kInk);
     text (L"音量", l.volumeLabel, m_fontSmall, kMuted);
@@ -2328,10 +2334,15 @@ void WinView::paintFloating (HDC dc)
         HBRUSH videoEdge = ::CreateSolidBrush (kRule);
         ::FrameRect (dc, &videoFrame, videoEdge);
         ::DeleteObject (videoEdge);
-        RECT position {px (l.position.x), px (l.position.y), px (l.position.right ()), px (l.position.bottom ())};
-        ::SelectObject (dc, m_fontPosition);
+        RECT position {px (l.position.x), px (l.position.y), px (l.position.right ()), px (l.position.y + 14)};
+        ::SelectObject (dc, m_fontHeading);
         ::SetTextColor (dc, kAccent);
         ::DrawTextW (dc, m_musicalText.c_str (), -1, &position,
+            DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        RECT scoreTempo {px (l.position.x), px (l.position.y + 14), px (l.position.right ()), px (l.position.bottom ())};
+        ::SelectObject (dc, m_fontSmall);
+        ::SetTextColor (dc, kMuted);
+        ::DrawTextW (dc, m_scoreTempoText.c_str (), -1, &scoreTempo,
             DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
         RECT time {px (l.time.x), px (l.time.y), px (l.time.right ()), px (l.time.bottom ())};
         ::SelectObject (dc, m_fontMono);
@@ -2368,13 +2379,16 @@ void WinView::paintFloating (HDC dc)
     ::SetTextColor (dc, kInk);
     RECT title {px (14), px (7), px (112), px (28)};
     ::DrawTextW (dc, L"MuseSync", -1, &title, DT_SINGLELINE | DT_VCENTER);
-    ::SelectObject (dc, m_fontPosition);
+    ::SelectObject (dc, m_fontHeading);
     ::SetTextColor (dc, kAccent);
-    RECT position {px (114), px (6), px (208), px (29)};
+    RECT position {px (114), px (3), px (208), px (17)};
     ::DrawTextW (dc, m_musicalText.c_str (), -1, &position,
                  DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_END_ELLIPSIS | DT_NOPREFIX);
     ::SelectObject (dc, m_fontSmall);
     ::SetTextColor (dc, kMuted);
+    RECT scoreTempo {px (114), px (17), px (208), px (31)};
+    ::DrawTextW (dc, m_scoreTempoText.c_str (), -1, &scoreTempo,
+                 DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_END_ELLIPSIS | DT_NOPREFIX);
     RECT status {px (14), px (30), px (94), px (49)};
     ::DrawTextW (dc, m_transportText.c_str (), -1, &status,
                  DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
@@ -3456,6 +3470,16 @@ void WinView::refreshLabels ()
     const auto musical = ap::musicalPosition (grid, scorePosition);
     std::swprintf (numeric, 32, L"%d-%d", musical.bar, musical.beat);
     update (m_musicalText, numeric, m_layout.musicalPosition);
+    double scoreBpm = 0;
+    if (tl.scoreTempoValid)
+        scoreBpm = ap::TempoTimeline (tl.scoreBpm, tl.scoreTempos).bpmAtSeconds (scorePosition);
+    else if (tl.tempoValid)
+        scoreBpm = tl.bpm;
+    if (scoreBpm > 0 && std::isfinite (scoreBpm))
+        std::swprintf (numeric, 32, L"谱面 %.1f", scoreBpm);
+    else
+        std::swprintf (numeric, 32, L"谱面 --");
+    update (m_scoreTempoText, numeric, m_layout.musicalPosition);
     const wchar_t* source = grid.source == ap::GridMetadata::Source::Manual ? L"手动" :
         grid.source == ap::GridMetadata::Source::LiveScore ? L"当前谱面" :
         grid.source == ap::GridMetadata::Source::Host ? L"宿主" :
