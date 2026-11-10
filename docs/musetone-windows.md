@@ -1,6 +1,6 @@
 # MuseSync 谱伴同步 for Windows
 
-当前发布版：**2.5.3**，同步组件：**MuseSync Bridge 1.4.0**。
+当前发布版：**2.5.4**，同步组件：**MuseSync Bridge 1.4.0**。
 
 原名 MuseTone。从 2.3.0 起，VST3 文件夹和内部模块已统一为 `MuseSync.vst3`。
 VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保持不变。
@@ -8,7 +8,7 @@ VST3 类 ID、参数状态、安装器身份及 `MuseToneSync` 同步路径保�
 
 ## 下载与启用
 
-普通用户下载 `MuseSync-Setup-2.5.3-Windows-x64.exe`，核对同一发布页的
+普通用户下载 `MuseSync-Setup-2.5.4-Windows-x64.exe`，核对同一发布页的
 `SHA256SUMS.txt` 后安装。此 EXE 是安装器，不是独立播放器。
 需要 Windows 10/11 x64、官方 MuseScore 4 安装版，以及 Microsoft Edge WebView2 Runtime；安装前保存谱面并退出 MuseScore。分发时只需发送 EXE，对方无需源码或 ZIP，但仍需安装宿主并启用插件。Windows 11 通常已预装 WebView2 Runtime；若视频窗口提示缺少运行时，请从微软官方渠道安装 Evergreen WebView2 Runtime。
 

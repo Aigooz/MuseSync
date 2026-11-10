@@ -4668,7 +4668,7 @@ LRESULT CALLBACK floatingProc (HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {
             auto* info = reinterpret_cast<MINMAXINFO*> (lp);
             const bool video = (::GetWindowLongPtrW (hwnd, GWL_STYLE) & WS_THICKFRAME) != 0;
-            info->ptMinTrackSize = video ? POINT {scaledOf (280), scaledOf (180)} :
+            info->ptMinTrackSize = video ? POINT {scaledOf (ui::videoFloatingMinWidth), scaledOf (ui::videoFloatingMinHeight)} :
                                           POINT {scaledOf (260), scaledOf (58)};
             return 0;
         }

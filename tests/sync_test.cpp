@@ -1253,7 +1253,8 @@ void videoControlTests (const std::filesystem::path& wave)
         RECT bounds {}, toolbar {};
         GetWindowRect (floating, &toolbar);
         GetWindowRect (video, &bounds);
-        return bounds.left == toolbar.left + 6 && bounds.top == toolbar.top + 88;
+        const auto layout = ap::ui::arrangeVideoFloating (toolbar.right - toolbar.left, toolbar.bottom - toolbar.top);
+        return bounds.left == toolbar.left + layout.video.x && bounds.top == toolbar.top + layout.video.y;
     }), "dragging toolbar keeps transparent video aligned");
     fixture.block (48000, ProcessContext::kPlaying);
     SendMessageW (panel, WM_TIMER, 1200, 0);
@@ -1264,7 +1265,8 @@ void videoControlTests (const std::filesystem::path& wave)
         RECT bounds {}, toolbar {};
         GetWindowRect (floating, &toolbar);
         GetWindowRect (video, &bounds);
-        return bounds.left == toolbar.left + 6 && bounds.top == toolbar.top + 88;
+        const auto layout = ap::ui::arrangeVideoFloating (toolbar.right - toolbar.left, toolbar.bottom - toolbar.top);
+        return bounds.left == toolbar.left + layout.video.x && bounds.top == toolbar.top + layout.video.y;
     }), "rapid moves leave video aligned at the final position");
     check (GetLayeredWindowAttributes (video, nullptr, &alpha, &flags) &&
            alpha == SendMessageW (opacity, TBM_GETPOS, 0, 0) * 255 / 100,
@@ -1333,10 +1335,10 @@ void videoControlTests (const std::filesystem::path& wave)
         waitUntil ([&] { return GetTickCount64 () >= ready; });
         savePreview (floating, L"video-floating-opaque-screen.bmp", true);
     }
-    const double floatingScale = (expandRect.bottom - expandRect.top) / 36.0;
+    const double floatingScale = (expandRect.bottom - expandRect.top) / 32.0;
     MINMAXINFO minimum {};
     SendMessageW (floating, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM> (&minimum));
-    check (minimum.ptMinTrackSize.x <= std::lround (280 * floatingScale) + 1 &&
+    check (minimum.ptMinTrackSize.x <= std::lround (ap::ui::videoFloatingMinWidth * floatingScale) + 1 &&
            minimum.ptMinTrackSize.y <= std::lround (180 * floatingScale) + 1,
            "video floating minimum permits a small window");
     SetWindowPos (floating, nullptr, 0, 0, minimum.ptMinTrackSize.x, minimum.ptMinTrackSize.y,

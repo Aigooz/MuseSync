@@ -40,23 +40,23 @@ struct VideoFloatingLayout
     Rect volumeIcon, volume, volumeValue, offsetLabel, offset, offsetUnit;
 };
 
+constexpr int videoFloatingMinWidth = 340;
+constexpr int videoFloatingMinHeight = 180;
+
 inline VideoFloatingLayout arrangeVideoFloating (int width, int height)
 {
-    const int w = std::max (280, width), h = std::max (180, height);
+    const int w = std::max (videoFloatingMinWidth, width), h = std::max (videoFloatingMinHeight, height);
     VideoFloatingLayout l {};
-    if (w < 560)
-        l = {{8, 4, 80, 28}, {148, 38, w - 156, 22},
-                {w - 180, 4, 20, 28}, {w - 156, 4, 60, 28}, {w - 92, 4, 40, 28},
-                {w - 40, 4, 32, 32}, {6, 104, w - 12, h - 110}, {8, 38, 132, 22}};
-    else {
-    const int timelineWidth = std::min (360, w - 300);
-    const int timelineX = 100 + (w - 300 - timelineWidth) / 2;
-    l = {{10, 10, 80, 32}, {timelineX, 26, timelineWidth, 18},
-            {w - 190, 10, 20, 32}, {w - 166, 10, 70, 32}, {w - 92, 10, 40, 32},
-            {w - 42, 8, 32, 36}, {6, 88, w - 12, h - 94}, {timelineX, 4, timelineWidth, 20}};
-    }
-    const int y = l.video.y - 38;
-    const int volumeWidth = std::min (120, w - 254);
+    l.position = {8, 4, 88, 32};
+    l.expand = {w - 40, 4, 32, 32};
+    l.opacityIcon = {w - 198, 4, 20, 32};
+    l.opacity = {w - 174, 4, 84, 32};
+    l.opacityValue = {w - 86, 4, 38, 32};
+    l.time = {8, 40, 132, 22};
+    l.progress = {148, 40, w - 156, 22};
+    l.video = {6, 108, w - 12, h - 114};
+    const int y = 68;
+    const int volumeWidth = std::min (180, w - 254);
     l.volumeIcon = {8, y, 20, 32};
     l.volume = {30, y, volumeWidth, 32};
     l.volumeValue = {l.volume.right () + 2, y, 40, 32};
