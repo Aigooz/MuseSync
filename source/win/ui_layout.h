@@ -47,22 +47,40 @@ inline VideoFloatingLayout arrangeVideoFloating (int width, int height)
 {
     const int w = std::max (videoFloatingMinWidth, width), h = std::max (videoFloatingMinHeight, height);
     VideoFloatingLayout l {};
-    l.position = {8, 4, 88, 32};
-    l.expand = {w - 40, 4, 32, 32};
-    l.opacityIcon = {w - 198, 4, 20, 32};
-    l.opacity = {w - 174, 4, 84, 32};
-    l.opacityValue = {w - 86, 4, 38, 32};
-    l.time = {8, 40, 132, 22};
-    l.progress = {148, 40, w - 156, 22};
-    l.video = {6, 108, w - 12, h - 114};
-    const int y = 68;
-    const int volumeWidth = std::min (180, w - 254);
-    l.volumeIcon = {8, y, 20, 32};
-    l.volume = {30, y, volumeWidth, 32};
-    l.volumeValue = {l.volume.right () + 2, y, 40, 32};
-    l.offsetLabel = {w - 180, y, 20, 32};
-    l.offset = {w - 156, y, 124, 32};
-    l.offsetUnit = {w - 28, y, 20, 32};
+    l.position = {12, 6, 80, 32};
+    l.expand = {w - 42, 6, 32, 32};
+    if (w >= 620)
+    {
+        l.time = {100, 11, 132, 22};
+        l.progress = {240, 10, w - 292, 24};
+        const int x = (w - 554) / 2;
+        l.volumeIcon = {x, 46, 20, 32};
+        l.volume = {x + 24, 46, 96, 32};
+        l.volumeValue = {x + 122, 46, 40, 32};
+        l.offsetLabel = {x + 186, 46, 20, 32};
+        l.offset = {x + 210, 46, 124, 32};
+        l.offsetUnit = {x + 338, 46, 22, 32};
+        l.opacityIcon = {x + 384, 46, 20, 32};
+        l.opacity = {x + 408, 46, 100, 32};
+        l.opacityValue = {x + 512, 46, 42, 32};
+        l.video = {6, 86, w - 12, h - 92};
+    }
+    else
+    {
+        l.opacityIcon = {w - 200, 6, 20, 32};
+        l.opacity = {w - 176, 6, 88, 32};
+        l.opacityValue = {w - 86, 6, 36, 32};
+        l.time = {12, 42, 132, 22};
+        l.progress = {148, 41, w - 160, 24};
+        const int volumeWidth = std::min (120, w - 258);
+        l.volumeIcon = {12, 70, 20, 32};
+        l.volume = {34, 70, volumeWidth, 32};
+        l.volumeValue = {l.volume.right () + 2, 70, 40, 32};
+        l.offsetLabel = {w - 180, 70, 20, 32};
+        l.offset = {w - 156, 70, 124, 32};
+        l.offsetUnit = {w - 28, 70, 20, 32};
+        l.video = {6, 110, w - 12, h - 116};
+    }
     return l;
 }
 

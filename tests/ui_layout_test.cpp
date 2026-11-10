@@ -97,7 +97,7 @@ int main ()
                 ++cases;
             }
     std::printf ("PASS: %d layout / DPI combinations, bounds and overlap checks\n", cases);
-    for (int width : {340, 341, 400, 479, 480, 559, 560, 640, 800, 1280})
+    for (int width : {340, 341, 400, 479, 560, 619, 620, 640, 800, 1280})
         for (int height : {180, 240, 340, 412, 720})
         {
             const auto l = ap::ui::arrangeVideoFloating (width, height);
@@ -111,10 +111,11 @@ int main ()
                 for (size_t j = i + 1; j < controls.size (); ++j)
                     if (overlaps (controls[i], controls[j])) return 1;
             }
-            if (l.progress.w < 180 || l.volume.w < 86 || l.opacity.w < 80 || l.video.y != 108 ||
+            if (l.progress.w < 180 || l.volume.w < 82 || l.opacity.w < 80 || l.video.y != (width >= 620 ? 86 : 110) ||
                 l.video.x != 6 || l.video.right () != width - 6 || l.video.bottom () != height - 6 ||
-                l.progress.y != l.time.y || l.volume.y != l.offset.y ||
-                l.opacity.right () >= l.opacityValue.x || l.opacityValue.right () >= l.expand.x)
+                l.volume.y != l.offset.y ||
+                l.opacity.right () >= l.opacityValue.x ||
+                (width < 620 && l.opacityValue.right () >= l.expand.x))
                 return 1;
         }
     double value = 0;

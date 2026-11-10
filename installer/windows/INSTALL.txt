@@ -1,4 +1,4 @@
-MuseSync 2.5.4 | Windows 64 位安装说明
+MuseSync 2.5.5 | Windows 64 位安装说明
 ====================================
 
 MuseSync 是配合 MuseScore 使用的 VST3 插件，不是独立播放器。
@@ -22,7 +22,7 @@ MuseSync 是配合 MuseScore 使用的 VST3 插件，不是独立播放器。
 
 一、安装与启用
 --------------
-1. 双击 MuseSync-Setup-2.5.4-Windows-x64.exe，允许管理员权限。
+1. 双击 MuseSync-Setup-2.5.5-Windows-x64.exe，允许管理员权限。
 2. 选择 MuseScore 4 的安装文件夹。文件夹内应包含
    bin\MuseScore4.exe，不是存放谱面的文件夹，支持其他盘符。
 3. 安装器会同时安装 MuseSync VST3 和 MuseSync Bridge。
